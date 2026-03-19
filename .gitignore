@@ -1,0 +1,13 @@
+.DS_Store
+.vercel
+*.pyc
+__pycache__/
+
+backend/.env
+backend/cert.pem
+backend/key.pem
+backend/venv/
+backend/.venv/
+backend/__pycache__/
+
+frontend/node_modules/

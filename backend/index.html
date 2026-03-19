@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>SpotiFeel</title>
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600&family=Space+Grotesk:wght@600;700&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="style.css"/>
+  <link href="https://unpkg.com/boxicons@2.1.4/css/boxicons.min.css" rel="stylesheet"/>
+</head>
+<body>
+<div class="lava-lamp" aria-hidden="true">
+  <span class="lava-lamp__blob lava-lamp__blob--one"></span>
+  <span class="lava-lamp__blob lava-lamp__blob--two"></span>
+  <span class="lava-lamp__blob lava-lamp__blob--three"></span>
+  <span class="lava-lamp__blob lava-lamp__blob--four"></span>
+</div>
+
+<header class="topbar">
+  <div class="logo" aria-label="SpotiFeel">SpotiFeel</div>
+  <nav>
+    <a href="#now-playing">Now Playing</a>
+    <a href="#recent-tracks">Day in Color</a>
+    <a href="#recommendations">Recommendations</a>
+    <a href="#playlists">Playlists</a>
+  </nav>
+  <div class="auth-buttons">
+    <button id="overview-toggle" class="btn btn-ghost" type="button" aria-pressed="false">Minimize</button>
+    <button id="login" class="btn" type="button">Log in</button>
+    <button id="logout" class="btn btn-ghost" type="button">Log out</button>
+  </div>
+</header>
+
+<section id="session-banner" class="session-banner hidden" aria-live="polite">
+  <p id="session-message">Connect Spotify to load your listening dashboard.</p>
+  <a id="session-link" class="btn session-link" href="/login">Connect Spotify</a>
+</section>
+
+<main>
+  <section id="now-playing" class="dashboard-section dashboard-section--hero">
+    <div class="hero-backdrop" aria-hidden="true">
+      <div id="hero-backdrop-current" class="hero-backdrop-layer"></div>
+      <div id="hero-backdrop-next" class="hero-backdrop-layer"></div>
+      <div class="hero-backdrop-wash"></div>
+    </div>
+    <div class="hero-shell">
+      <div class="hero-copy">
+        <p class="hero-kicker">Now Playing</p>
+        <div class="hero-chip-row">
+          <span id="hero-wave-chip" class="hero-chip hero-wave-chip" aria-hidden="true">
+            <span class="hero-wave-chip__bar"></span>
+            <span class="hero-wave-chip__bar"></span>
+            <span class="hero-wave-chip__bar"></span>
+            <span class="hero-wave-chip__bar"></span>
+            <span class="hero-wave-chip__bar"></span>
+          </span>
+          <span id="genre-chip" class="hero-chip genre-chip hidden"></span>
+          <span id="session-chip" class="hero-chip session-chip">Adaptive</span>
+        </div>
+        <h1 id="hero-title">Connect Spotify</h1>
+        <p id="hero-artist" class="hero-artist">Log in to start the experience.</p>
+        <p id="hero-context" class="hero-context">Album art, motion, and lyrics react to what you are listening to.</p>
+        <div id="hero-arc" class="hero-arc hidden" aria-live="polite">
+          <p class="hero-arc__kicker">Song-to-Song Arc</p>
+          <p id="hero-arc-text" class="hero-arc__text"></p>
+        </div>
+      </div>
+
+      <div class="now-views">
+        <button class="chip active" data-view="card">Card</button>
+        <button class="chip" data-view="vinyl">Vinyl</button>
+        <button class="chip" data-view="lyrics">Live Lyrics</button>
+      </div>
+
+      <div class="hero-stage">
+        <div id="now-card" class="hero-view">
+          <div id="track" class="track-card small" aria-live="polite">Checking Spotify session...</div>
+        </div>
+
+        <div id="now-vinyl" class="hero-view hidden">
+          <div class="vinyl-wrap">
+            <button id="vinyl-toggle" class="vinyl-button" type="button" aria-label="Toggle playback">
+              <span class="tonearm" aria-hidden="true"></span>
+              <div class="vinyl">
+                <div class="vinyl-grooves"></div>
+                <img id="vinyl-label" alt="Album label">
+              </div>
+            </button>
+            <div class="vinyl-meta">
+              <p id="vinyl-title">—</p>
+              <p id="vinyl-artist">—</p>
+            </div>
+          </div>
+        </div>
+
+        <div id="now-lyrics" class="hero-view hidden">
+          <div class="lyrics-panel">
+            <p class="lyrics-overline">Lyrics</p>
+            <h3 id="lyrics-title">Play a song to view lyrics.</h3>
+            <p id="lyrics-subtitle" class="lyrics-subtitle">Start a track in Spotify and switch to this view to read along.</p>
+            <div id="lyrics-content" class="lyrics-content" aria-live="polite">Lyrics will appear here when available.</div>
+            <div id="lyrics-links" class="lyrics-links hidden">
+              <a id="lyrics-genius" href="#" target="_blank" rel="noreferrer">Open on Genius</a>
+              <a id="lyrics-search" href="#" target="_blank" rel="noreferrer">Search Lyrics</a>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="hero-visualizer" class="hero-visualizer" aria-hidden="true">
+        <span class="hero-visualizer__bar"></span>
+        <span class="hero-visualizer__bar"></span>
+        <span class="hero-visualizer__bar"></span>
+        <span class="hero-visualizer__bar"></span>
+        <span class="hero-visualizer__bar"></span>
+        <span class="hero-visualizer__bar"></span>
+        <span class="hero-visualizer__bar"></span>
+        <span class="hero-visualizer__bar"></span>
+        <span class="hero-visualizer__bar"></span>
+        <span class="hero-visualizer__bar"></span>
+        <span class="hero-visualizer__bar"></span>
+        <span class="hero-visualizer__bar"></span>
+      </div>
+
+      <div class="hero-progress">
+        <span id="hero-current-time">0:00</span>
+        <div class="hero-progress-track"><div id="hero-progress-bar" class="hero-progress-bar"></div></div>
+        <span id="hero-total-time">0:00</span>
+      </div>
+
+      <div class="hero-actions">
+        <button id="room-toggle" class="hero-link hero-link--button" type="button" aria-pressed="false">Ambient Mode</button>
+        <a id="spotify-link" class="hero-link hidden" href="#" target="_blank" rel="noreferrer">Open in Spotify</a>
+      </div>
+    </div>
+  </section>
+
+  <section id="recent-tracks" class="dashboard-section">
+    <h2>Your Day in Color</h2>
+    <p id="recent-context" class="section-context">A color memory of what today has sounded like.</p>
+    <div id="recent-list" class="history-list" aria-live="polite"></div>
+  </section>
+
+  <section id="recommendations" class="dashboard-section">
+    <h2>Curated For You</h2>
+    <p id="rec-context" class="section-context">Play something and SpotiFeel will turn it into a curated listening path.</p>
+    <div id="rec-list" class="recommendation-groups" aria-live="polite"></div>
+  </section>
+
+  <section id="playlists" class="dashboard-section">
+    <h2>Create a Playlist</h2>
+    <p class="section-context">Each playlist now uses your current song and recent listening profile behind the scenes, without forcing extra controls into the dashboard.</p>
+
+    <h3>By Genre</h3>
+    <div class="playlist-grid scrollable">
+      <button class="playlist-card" type="button" data-playlist="pop"><i class="bx bx-music"></i><h3>Pop</h3></button>
+      <button class="playlist-card" type="button" data-playlist="rock"><i class="bx bx-radio"></i><h3>Rock</h3></button>
+      <button class="playlist-card" type="button" data-playlist="hip-hop"><i class="bx bx-microphone"></i><h3>Hip-Hop</h3></button>
+      <button class="playlist-card" type="button" data-playlist="indie-pop"><i class="bx bx-leaf"></i><h3>Indie Pop</h3></button>
+      <button class="playlist-card" type="button" data-playlist="jazz"><i class="bx bxs-music"></i><h3>Jazz</h3></button>
+      <button class="playlist-card" type="button" data-playlist="metal"><i class="bx bx-radio"></i><h3>Metal</h3></button>
+      <button class="playlist-card" type="button" data-playlist="classical"><i class="bx bx-book-reader"></i><h3>Classical</h3></button>
+      <button class="playlist-card" type="button" data-playlist="edm"><i class="bx bx-disc"></i><h3>EDM</h3></button>
+    </div>
+
+    <h3>By Decade</h3>
+    <div class="playlist-grid scrollable">
+      <button class="playlist-card" type="button" data-playlist="60s"><i class="bx bx-radio-circle"></i><h3>60s</h3></button>
+      <button class="playlist-card" type="button" data-playlist="70s"><i class="bx bx-radio"></i><h3>70s</h3></button>
+      <button class="playlist-card" type="button" data-playlist="80s"><i class="bx bx-disc"></i><h3>80s</h3></button>
+      <button class="playlist-card" type="button" data-playlist="90s"><i class="bx bx-music"></i><h3>90s</h3></button>
+      <button class="playlist-card" type="button" data-playlist="2000s"><i class="bx bx-time-five"></i><h3>2000s</h3></button>
+      <button class="playlist-card" type="button" data-playlist="2010s"><i class="bx bx-star"></i><h3>2010s</h3></button>
+      <button class="playlist-card" type="button" data-playlist="2020s"><i class="bx bx-rocket"></i><h3>2020s</h3></button>
+    </div>
+
+    <h3>By Mood</h3>
+    <div class="playlist-grid scrollable">
+      <button class="playlist-card" type="button" data-playlist="workout"><i class="bx bx-dumbbell"></i><h3>Workout</h3></button>
+      <button class="playlist-card" type="button" data-playlist="late night drive"><i class="bx bx-car"></i><h3>Late Night Drive</h3></button>
+      <button class="playlist-card" type="button" data-playlist="study"><i class="bx bx-book-reader"></i><h3>Study</h3></button>
+      <button class="playlist-card" type="button" data-playlist="focus"><i class="bx bx-target-lock"></i><h3>Focus</h3></button>
+      <button class="playlist-card" type="button" data-playlist="party"><i class="bx bx-drink"></i><h3>Party</h3></button>
+      <button class="playlist-card" type="button" data-playlist="chill"><i class="bx bx-coffee"></i><h3>Chill</h3></button>
+    </div>
+
+    <p id="playlist-status" class="playlist-status" aria-live="polite"></p>
+    <div id="playlist-links" class="playlist-links"></div>
+  </section>
+</main>
+
+<div class="player-bar">
+  <div class="player-info">
+    <div id="player-art-shell" class="player-art-shell is-empty">
+      <span class="player-art-fallback"><i class="bx bx-disc"></i></span>
+      <img id="player-art" alt="Album art"/>
+    </div>
+    <div>
+      <p id="player-title">No song playing</p>
+      <p id="player-artist"></p>
+    </div>
+  </div>
+  <div class="progress-wrapper">
+    <span id="current-time">0:00</span>
+    <div class="progress-container"><div class="progress-bar"></div></div>
+    <span id="total-time">0:00</span>
+  </div>
+  <div class="controls">
+    <a id="yt-link" class="yt-button is-disabled" href="#" target="_blank" rel="noreferrer"><i class="bx bxl-youtube"></i> Watch</a>
+  </div>
+</div>
+
+<script src="script.js"></script>
+</body>
+</html>

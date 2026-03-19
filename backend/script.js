@@ -328,6 +328,7 @@ const state = {
   previousTrackSnapshot: null,
   overviewMode: false,
   roomMode: false,
+  roomPreviousView: null,
   overviewPreviousView: null,
   overviewScrollY: 0,
   preferences: {
@@ -806,6 +807,14 @@ function formatTimeRange(startValue, endValue) {
   return `${startLabel} - ${endLabel}`;
 }
 
+function getTodayBounds(reference = new Date()) {
+  const start = new Date(reference);
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(start);
+  end.setDate(end.getDate() + 1);
+  return { start, end };
+}
+
 function getListeningChapter(value) {
   const date = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(date.getTime())) {
@@ -853,11 +862,13 @@ function getListeningChapter(value) {
 }
 
 function buildListeningTimeline(items = []) {
+  const { start, end } = getTodayBounds();
   const plays = items
     .map((item) => {
       const track = item?.track;
       const playedAt = item?.played_at ? new Date(item.played_at) : null;
       if (!track || !playedAt || Number.isNaN(playedAt.getTime())) return null;
+      if (playedAt < start || playedAt >= end) return null;
       return {
         track,
         playedAt,
@@ -1197,6 +1208,16 @@ function queueOverviewLayoutSync() {
 
 function applyRoomMode() {
   document.body.classList.toggle("room-mode", state.roomMode);
+  if (state.roomMode) {
+    if (!state.roomPreviousView) state.roomPreviousView = state.activeView;
+    if (state.activeView !== "card") setNowView("card");
+  } else if (state.roomPreviousView && state.activeView === "card") {
+    const restoreView = state.roomPreviousView;
+    state.roomPreviousView = null;
+    setNowView(restoreView);
+  } else if (!state.roomMode) {
+    state.roomPreviousView = null;
+  }
   if (!elements.roomToggle) return;
   elements.roomToggle.textContent = state.roomMode ? "Exit Ambient" : "Ambient Mode";
   elements.roomToggle.setAttribute("aria-pressed", String(state.roomMode));
@@ -1406,9 +1427,8 @@ function setHeroMeta({ item = null, context = "" } = {}) {
 
   elements.heroTitle.textContent = item.name || "Unknown track";
   elements.heroArtist.textContent = (item.artists || []).map((artist) => artist.name).join(", ") || "Unknown artist";
-  const nextContext = context !== undefined ? context : (state.currentMood?.context ?? "");
-  elements.heroContext.textContent = nextContext || "";
-  elements.heroContext.classList.toggle("hidden", !nextContext);
+  elements.heroContext.textContent = "";
+  elements.heroContext.classList.add("hidden");
   updateMoodChip();
   updateGenreChip();
   setSpotifyLink(item.external_urls?.spotify || "");
@@ -1918,7 +1938,19 @@ function updateTrackCard(item) {
 
   const artUrl = item.album?.images?.[0]?.url || "";
   const artists = (item.artists || []).map((artist) => artist.name).join(", ");
-  const moodMarkup = state.currentMood?.label ? `<p class="track-genre">${escapeHtml(state.currentMood.label)}</p>` : "";
+  const waveMarkup = `
+    <div class="track-wave" aria-hidden="true">
+      <span class="track-wave__bar"></span>
+      <span class="track-wave__bar"></span>
+      <span class="track-wave__bar"></span>
+      <span class="track-wave__bar"></span>
+      <span class="track-wave__bar"></span>
+      <span class="track-wave__bar"></span>
+      <span class="track-wave__bar"></span>
+      <span class="track-wave__bar"></span>
+      <span class="track-wave__bar"></span>
+    </div>
+  `;
 
   elements.track.innerHTML = `
     <div class="track-art-shell">
@@ -1931,7 +1963,7 @@ function updateTrackCard(item) {
     </div>
     <h3 class="track-title">${escapeHtml(item.name || "Unknown track")}</h3>
     <p class="track-meta">${escapeHtml(artists || "Unknown artist")}</p>
-    ${moodMarkup}
+    ${waveMarkup}
   `;
 }
 

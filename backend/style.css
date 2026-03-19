@@ -662,17 +662,54 @@ main {
   color: var(--text-soft);
 }
 
-.track-genre {
+.track-wave {
   display: inline-flex;
-  margin-top: 14px;
-  padding: 7px 12px;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 9px;
+  width: min(100%, 220px);
+  min-height: 34px;
+  margin: 16px auto 0;
+  padding: 0 10px;
+}
+
+.track-wave__bar {
+  width: 10px;
+  height: 26px;
   border-radius: 999px;
-  background: var(--accent-soft);
-  color: var(--text);
-  font-size: 0.92rem;
-  font-weight: 500;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
-  transition: background 0.8s ease, color 0.8s ease;
+  background: linear-gradient(180deg, var(--accent-strong), var(--accent));
+  transform-origin: bottom center;
+  opacity: 0.9;
+  animation: card-wave 1.18s ease-in-out infinite;
+}
+
+.track-wave__bar:nth-child(1),
+.track-wave__bar:nth-child(9) {
+  height: 14px;
+  animation-delay: -0.54s;
+}
+
+.track-wave__bar:nth-child(2),
+.track-wave__bar:nth-child(8) {
+  height: 18px;
+  animation-delay: -0.28s;
+}
+
+.track-wave__bar:nth-child(3),
+.track-wave__bar:nth-child(7) {
+  height: 22px;
+  animation-delay: -0.72s;
+}
+
+.track-wave__bar:nth-child(4),
+.track-wave__bar:nth-child(6) {
+  height: 28px;
+  animation-delay: -0.16s;
+}
+
+.track-wave__bar:nth-child(5) {
+  height: 34px;
+  animation-delay: -0.44s;
 }
 
 .lyrics-panel {
@@ -1719,11 +1756,17 @@ button:active,
 }
 
 .hero-wave-chip {
+  display: inline-flex;
+  align-items: flex-end;
   gap: 5px;
-  justify-content: center;
+  justify-content: flex-start;
+  width: fit-content;
   min-width: 74px;
-  padding: 0 12px;
+  min-height: 28px;
+  margin-top: 2px;
+  padding: 0 4px;
   background: linear-gradient(135deg, var(--accent-soft), rgba(255, 255, 255, 0.08));
+  border-radius: 999px;
 }
 
 .hero-wave-chip__bar {
@@ -2718,153 +2761,87 @@ body.room-mode {
   overflow: hidden;
 }
 
-body.room-mode .topbar nav,
-body.room-mode #overview-toggle,
+body.room-mode .topbar,
 body.room-mode #recent-tracks,
 body.room-mode #recommendations,
 body.room-mode #playlists,
-body.room-mode .session-banner {
+body.room-mode .session-banner,
+body.room-mode .hero-copy,
+body.room-mode .now-views,
+body.room-mode .hero-visualizer,
+body.room-mode .hero-progress,
+body.room-mode #spotify-link {
   display: none;
 }
 
 body.room-mode main {
-  width: min(1440px, calc(100% - 32px));
-  margin-top: 18px;
-  padding-bottom: 142px;
+  width: 100%;
+  margin: 0;
+  padding: 0;
 }
 
 body.room-mode .dashboard-section--hero {
-  min-height: calc(100vh - 184px);
-  height: calc(100vh - 184px);
-  margin-bottom: 0;
-  border-radius: 34px;
+  min-height: 100vh;
+  height: 100vh;
+  margin: 0;
+  border-radius: 0;
+  border-inline: 0;
 }
 
 body.room-mode .hero-shell {
-  padding: 34px 38px 28px;
-  grid-template-columns: minmax(0, 1fr) minmax(320px, 460px);
-  grid-template-areas:
-    "copy stage"
-    "views stage"
-    "visualizer stage"
-    "actions stage";
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
-  align-content: stretch;
-  column-gap: clamp(32px, 5vw, 72px);
-  row-gap: 18px;
-}
-
-body.room-mode .hero-copy {
-  grid-area: copy;
-  width: auto;
-  max-width: 760px;
-  align-self: end;
-  gap: 10px;
-}
-
-body.room-mode #hero-title {
-  font-size: clamp(2.8rem, 6vw, 5.2rem);
-}
-
-body.room-mode .hero-artist {
-  font-size: clamp(1.12rem, 2vw, 1.5rem);
-}
-
-body.room-mode .hero-context {
-  max-width: 640px;
-  font-size: 1rem;
-}
-
-body.room-mode .hero-arc {
-  width: min(100%, 620px);
-}
-
-body.room-mode .now-views {
-  grid-area: views;
-  margin-bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100%;
+  padding: clamp(28px, 4vw, 48px);
 }
 
 body.room-mode .hero-stage {
-  grid-area: stage;
-  width: 100%;
-  max-width: 440px;
-  justify-self: end;
+  width: min(76vh, 560px);
+  max-width: min(76vh, 560px);
+  justify-self: center;
   align-self: center;
 }
 
 body.room-mode #track {
-  width: min(100%, 360px);
+  width: min(76vh, 560px);
+  max-width: 100%;
+  margin-inline: auto;
 }
 
 body.room-mode .track-art {
-  max-width: 272px;
-}
-
-body.room-mode .vinyl-wrap,
-body.room-mode .lyrics-panel {
-  width: 100%;
-  max-width: 440px;
-}
-
-body.room-mode .hero-visualizer {
-  grid-area: visualizer;
-  justify-content: flex-start;
-  width: min(100%, 360px);
-  height: 68px;
+  max-width: 400px;
 }
 
 body.room-mode .hero-actions {
-  grid-area: actions;
+  position: fixed;
+  top: 18px;
+  right: 18px;
+  z-index: 150;
+  width: auto;
+  margin: 0;
 }
 
 body.room-mode .player-bar {
-  position: fixed;
-  left: 24px;
-  right: 24px;
-  bottom: 18px;
-  z-index: 120;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 28px;
-  background:
-    linear-gradient(180deg, rgba(8, 10, 16, 0.88), rgba(8, 10, 16, 0.72)),
-    linear-gradient(135deg, rgba(255, 255, 255, 0.06), transparent 34%);
-  box-shadow: 0 24px 54px rgba(0, 0, 0, 0.26);
-  backdrop-filter: blur(28px);
+  display: none;
 }
 
 @media (max-width: 1100px) {
-  body.room-mode {
-    overflow: auto;
-  }
-
-  body.room-mode main {
-    padding-bottom: 192px;
-  }
-
-  body.room-mode .dashboard-section--hero {
-    min-height: auto;
-    height: auto;
-  }
-
   body.room-mode .hero-shell {
-    grid-template-columns: 1fr;
-    grid-template-areas:
-      "copy"
-      "views"
-      "stage"
-      "visualizer"
-      "actions";
-    grid-template-rows: auto;
-    padding: 24px 22px 22px;
-    row-gap: 16px;
+    padding: 24px 20px;
   }
 
-  body.room-mode .hero-stage,
-  body.room-mode .vinyl-wrap,
-  body.room-mode .lyrics-panel,
   body.room-mode #track {
-    justify-self: center;
-    max-width: 100%;
+    width: min(88vw, 480px);
+  }
+
+  body.room-mode .hero-stage {
+    width: min(88vw, 480px);
+    max-width: min(88vw, 480px);
+  }
+
+  body.room-mode .track-art {
+    max-width: 68vw;
   }
 }
 

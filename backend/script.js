@@ -2876,8 +2876,6 @@ async function togglePlayback() {
 }
 
 function setupEventHandlers() {
-  if (elements.loginBtn) elements.loginBtn.onclick = () => (window.location.href = "/login");
-  if (elements.logoutBtn) elements.logoutBtn.onclick = () => (window.location.href = "/logout");
   if (elements.overviewToggle) {
     elements.overviewToggle.addEventListener("click", () => {
       state.overviewMode = !state.overviewMode;

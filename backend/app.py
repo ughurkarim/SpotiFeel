@@ -1039,12 +1039,17 @@ def login():
 @app.route("/callback")
 def callback():
     code = request.args.get("code")
+    oauth_error = request.args.get("error")
+    oauth_error_description = request.args.get("error_description")
     incoming_state = request.args.get("state")
     expected_state = session.pop("oauth_state", None)
     if not expected_state or incoming_state != expected_state:
         return "Invalid state parameter", 400
+    if oauth_error:
+        detail = oauth_error_description or oauth_error.replace("_", " ")
+        return f"Spotify authorization failed: {detail}", 400
     if not code:
-        return "No code provided", 400
+        return "Spotify did not return an authorization code. Check the redirect URI and app settings.", 400
     data = {
         "grant_type": "authorization_code",
         "code": code,

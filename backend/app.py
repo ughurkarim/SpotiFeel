@@ -40,7 +40,7 @@ LASTFM_API_KEY = os.getenv("LASTFM_API_KEY")
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
 CURRENT_PLAYBACK_CACHE = {}
 USER_TASTE_CACHE = {}
-SPOTIFY_AUTH_PATH = BASE_DIR / ".spotify_auth.json"
+SPOTIFY_AUTH_PATH = Path(os.getenv("SPOTIFY_AUTH_PATH", "/tmp/spotifeel_spotify_auth.json"))
 AUTH_STATE_KEYS = ("access_token", "refresh_token", "expires_at", "scopes")
 
 def auth_header():
@@ -105,7 +105,12 @@ def save_auth_state(auth_state):
     if not normalized:
         clear_auth_state()
         return
-    SPOTIFY_AUTH_PATH.write_text(json.dumps(normalized), encoding="utf-8")
+    try:
+        SPOTIFY_AUTH_PATH.parent.mkdir(parents=True, exist_ok=True)
+        SPOTIFY_AUTH_PATH.write_text(json.dumps(normalized), encoding="utf-8")
+    except OSError:
+        for key, value in normalized.items():
+            session[key] = value
 
 def clear_auth_state():
     try:
@@ -1140,7 +1145,7 @@ def callback():
     if r.status_code != 200:
         return f"Error: {r.text}", 400
     payload = r.json()
-    refresh_token = payload.get("refresh_token")
+    refresh_token = payload.get("refresh_token") or load_auth_state().get("refresh_token")
     if not refresh_token:
         return "No refresh token available — please re-authenticate", 400
     save_auth_state(

@@ -151,7 +151,6 @@ celerybeat.pid
 .envrc
 .venv
 backend/.env
-backend/.spotify_auth.json
 backend/.venv/
 backend/venv/
 env/

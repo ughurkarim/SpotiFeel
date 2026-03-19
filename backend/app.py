@@ -1,4 +1,4 @@
-import os, re, time, json, base64, secrets, hashlib, requests
+import os, re, time, base64, secrets, hashlib, requests
 from collections import Counter
 from pathlib import Path
 from urllib.parse import urlencode, quote, quote_plus
@@ -40,8 +40,6 @@ LASTFM_API_KEY = os.getenv("LASTFM_API_KEY")
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
 CURRENT_PLAYBACK_CACHE = {}
 USER_TASTE_CACHE = {}
-SPOTIFY_AUTH_PATH = BASE_DIR / ".spotify_auth.json"
-AUTH_STATE_KEYS = ("access_token", "refresh_token", "expires_at", "scopes")
 
 def auth_header():
     auth_str = f"{CLIENT_ID}:{CLIENT_SECRET}".encode("utf-8")
@@ -68,58 +66,8 @@ def safe_json(response):
 def clamp(value, low, high):
     return max(low, min(high, value))
 
-def load_auth_state():
-    if SPOTIFY_AUTH_PATH.exists():
-        try:
-            payload = json.loads(SPOTIFY_AUTH_PATH.read_text(encoding="utf-8"))
-        except (OSError, ValueError, TypeError):
-            payload = {}
-        if isinstance(payload, dict):
-            normalized = {
-                key: payload[key]
-                for key in AUTH_STATE_KEYS
-                if key in payload and payload[key] not in (None, "")
-            }
-            if normalized:
-                return normalized
-
-    session_auth_state = {
-        key: session[key]
-        for key in AUTH_STATE_KEYS
-        if key in session and session[key] not in (None, "")
-    }
-    if session_auth_state:
-        save_auth_state(session_auth_state)
-        for key in AUTH_STATE_KEYS:
-            session.pop(key, None)
-        return session_auth_state
-
-    return {}
-
-def save_auth_state(auth_state):
-    normalized = {
-        key: auth_state[key]
-        for key in AUTH_STATE_KEYS
-        if key in auth_state and auth_state[key] not in (None, "")
-    }
-    if not normalized:
-        clear_auth_state()
-        return
-    SPOTIFY_AUTH_PATH.write_text(json.dumps(normalized), encoding="utf-8")
-
-def clear_auth_state():
-    try:
-        SPOTIFY_AUTH_PATH.unlink()
-    except FileNotFoundError:
-        pass
-    except OSError:
-        pass
-    for key in AUTH_STATE_KEYS:
-        session.pop(key, None)
-
 def session_cache_key():
-    auth_state = load_auth_state()
-    seed = auth_state.get("refresh_token") or auth_state.get("access_token") or request.remote_addr or "anonymous"
+    seed = session.get("refresh_token") or session.get("access_token") or request.remote_addr or "anonymous"
     return hashlib.sha1(seed.encode("utf-8")).hexdigest()
 
 def prune_cache(store, ttl):
@@ -129,11 +77,7 @@ def prune_cache(store, ttl):
         store.pop(key, None)
 
 def spotify_headers(json_body=False):
-    auth_state = load_auth_state()
-    access_token = auth_state.get("access_token")
-    if not access_token:
-        raise KeyError("access_token")
-    headers = {"Authorization": f"Bearer {access_token}"}
+    headers = {"Authorization": f"Bearer {session['access_token']}"}
     if json_body:
         headers["Content-Type"] = "application/json"
     return headers
@@ -156,14 +100,13 @@ def chunked(values, size):
         yield values[index:index + size]
 
 def ensure_token(force_refresh=False):
-    auth_state = load_auth_state()
-    if "access_token" not in auth_state:
+    if "access_token" not in session:
         return False
     now = time.time()
-    exp = auth_state.get("expires_at", 0)
+    exp = session.get("expires_at", 0)
     if not force_refresh and now < exp - 30:
         return True
-    refresh_token = auth_state.get("refresh_token")
+    refresh_token = session.get("refresh_token")
     if not refresh_token:
         return False
     data = {"grant_type": "refresh_token", "refresh_token": refresh_token}
@@ -172,13 +115,12 @@ def ensure_token(force_refresh=False):
         print("Token refresh failed:", r.text)
         return False
     payload = r.json()
-    updated_auth_state = {
-        "access_token": payload["access_token"],
-        "refresh_token": payload.get("refresh_token", refresh_token),
-        "expires_at": now + int(payload.get("expires_in", 3600)),
-        "scopes": payload.get("scope", auth_state.get("scopes")),
-    }
-    save_auth_state(updated_auth_state)
+    session["access_token"] = payload["access_token"]
+    session["expires_at"] = now + int(payload.get("expires_in", 3600))
+    if "refresh_token" in payload:
+        session["refresh_token"] = payload["refresh_token"]
+    if "scope" in payload:
+        session["scopes"] = payload["scope"]
     return True
 
 def _normalize_tag_to_seed(tag: str) -> str:
@@ -247,13 +189,6 @@ def clean_track_title_for_lyrics(title: str) -> str:
         cleaned = re.sub(pattern, "", cleaned, flags=re.IGNORECASE)
     return re.sub(r"\s{2,}", " ", cleaned).strip()
 
-def normalize_playback_payload(payload):
-    if not isinstance(payload, dict):
-        return payload
-    normalized = dict(payload)
-    normalized["playing"] = bool(normalized.get("is_playing"))
-    return normalized
-
 def get_current_playback_payload(force=False):
     if not ensure_token(force_refresh=True):
         return {"error": "not_authenticated"}, 401
@@ -272,22 +207,6 @@ def get_current_playback_payload(force=False):
         payload = safe_json(response)
         if payload is None:
             payload = {"error": "invalid_response", "details": response.text}
-
-    if response.status_code in (200, 204):
-        needs_fallback = response.status_code == 204 or not isinstance(payload, dict) or not payload.get("item")
-        if needs_fallback:
-            fallback_response = http_get("https://api.spotify.com/v1/me/player", headers=spotify_headers())
-            if fallback_response.status_code == 200:
-                fallback_payload = safe_json(fallback_response)
-                if isinstance(fallback_payload, dict) and fallback_payload.get("item"):
-                    response = fallback_response
-                    payload = fallback_payload
-            elif fallback_response.status_code == 401:
-                response = fallback_response
-                payload = safe_json(fallback_response) or {"error": "invalid_response", "details": fallback_response.text}
-
-    if response.status_code == 200:
-        payload = normalize_playback_payload(payload)
 
     if response.status_code in (200, 204):
         CURRENT_PLAYBACK_CACHE[cache_key] = {
@@ -1140,17 +1059,14 @@ def callback():
     if r.status_code != 200:
         return f"Error: {r.text}", 400
     payload = r.json()
-    refresh_token = payload.get("refresh_token")
-    if not refresh_token:
+    session["access_token"] = payload["access_token"]
+    session["expires_at"] = time.time() + int(payload.get("expires_in", 3600))
+    if "refresh_token" in payload:
+        session["refresh_token"] = payload["refresh_token"]
+    elif "refresh_token" not in session:
         return "No refresh token available — please re-authenticate", 400
-    save_auth_state(
-        {
-            "access_token": payload["access_token"],
-            "refresh_token": refresh_token,
-            "expires_at": time.time() + int(payload.get("expires_in", 3600)),
-            "scopes": payload.get("scope"),
-        }
-    )
+    if "scope" in payload:
+        session["scopes"] = payload["scope"]
     return redirect("/")
 
 @app.route("/api/session")
@@ -1521,8 +1437,8 @@ def player_toggle():
     if not ensure_token(force_refresh=True):
         return jsonify({"error": "not_authenticated"}), 401
 
-    headers = spotify_headers()
-    current_res = http_get("https://api.spotify.com/v1/me/player", headers=headers)
+    headers = {"Authorization": f"Bearer {session['access_token']}"}
+    current_res = http_get("https://api.spotify.com/v1/me/player/currently-playing", headers=headers)
     if current_res.status_code == 204:
         return jsonify({"error": "no_active_playback"}), 409
     if current_res.status_code != 200:
@@ -1547,7 +1463,10 @@ def player_play():
     if not uri:
         return jsonify({"error": "missing_uri"}), 400
 
-    headers = spotify_headers(json_body=True)
+    headers = {
+        "Authorization": f"Bearer {session['access_token']}",
+        "Content-Type": "application/json",
+    }
     play_res = http_put(
         "https://api.spotify.com/v1/me/player/play",
         headers=headers,
@@ -1617,7 +1536,6 @@ def static_files(path):
 def logout():
     CURRENT_PLAYBACK_CACHE.pop(session_cache_key(), None)
     USER_TASTE_CACHE.pop(session_cache_key(), None)
-    clear_auth_state()
     session.clear()
     return redirect("/")
 

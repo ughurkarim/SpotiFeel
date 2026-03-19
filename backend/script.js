@@ -1229,6 +1229,9 @@ function applyRoomMode() {
 }
 
 function applyOverviewMode() {
+  if (window.innerWidth < 960 && state.overviewMode) {
+    state.overviewMode = false;
+  }
   const enteringOverview = state.overviewMode;
   if (state.overviewMode && state.roomMode) {
     state.roomMode = false;
@@ -1247,6 +1250,7 @@ function applyOverviewMode() {
   } else if (!state.overviewMode) {
     state.overviewPreviousView = null;
   }
+  syncTrackPanelEmptyState();
   if (!elements.overviewToggle) return;
   elements.overviewToggle.textContent = state.overviewMode ? "Expand" : "Minimize";
   elements.overviewToggle.setAttribute("aria-pressed", String(state.overviewMode));
@@ -1699,6 +1703,38 @@ function renderEmptyState(container, title, detail) {
   `;
 }
 
+function shouldBlankTrackPanelInOverview() {
+  return state.overviewMode && window.innerWidth >= 960;
+}
+
+function renderTrackPanelEmptyState(title, detail) {
+  if (!elements.track) return;
+  elements.track.dataset.emptyTitle = title;
+  elements.track.dataset.emptyDetail = detail;
+  if (shouldBlankTrackPanelInOverview()) {
+    elements.track.innerHTML = "";
+    return;
+  }
+  renderEmptyState(elements.track, title, detail);
+}
+
+function clearTrackPanelEmptyState() {
+  if (!elements.track) return;
+  delete elements.track.dataset.emptyTitle;
+  delete elements.track.dataset.emptyDetail;
+}
+
+function syncTrackPanelEmptyState() {
+  if (!elements.track) return;
+  const { emptyTitle, emptyDetail } = elements.track.dataset;
+  if (!emptyTitle || !emptyDetail) return;
+  if (shouldBlankTrackPanelInOverview()) {
+    elements.track.innerHTML = "";
+    return;
+  }
+  renderEmptyState(elements.track, emptyTitle, emptyDetail);
+}
+
 function setPlayerState({ title, artist, artUrl }) {
   if (elements.playerTitle) elements.playerTitle.textContent = title;
   if (elements.playerArtist) elements.playerArtist.textContent = artist;
@@ -1920,21 +1956,14 @@ function resetProgress() {
 function updateTrackCard(item) {
   if (!elements.track) return;
   if (!item) {
-    if (state.overviewMode && window.innerWidth >= 960) {
-      elements.track.innerHTML = `
-        <div class="track-art-shell track-art-shell--placeholder" aria-hidden="true">
-          <div class="track-art track-art--placeholder"></div>
-        </div>
-      `;
-      return;
-    }
-    renderEmptyState(
-      elements.track,
+    renderTrackPanelEmptyState(
       "Nothing is playing right now.",
       "Start a song in Spotify and this panel will update automatically."
     );
     return;
   }
+
+  clearTrackPanelEmptyState();
 
   const artUrl = item.album?.images?.[0]?.url || "";
   const artists = (item.artists || []).map((artist) => artist.name).join(", ");
@@ -2478,8 +2507,7 @@ async function fetchNowPlaying({ forceMeta = false, force = false } = {}) {
     }
 
     if (!response.ok || data?.error) {
-      renderEmptyState(
-        elements.track,
+      renderTrackPanelEmptyState(
         "Playback is temporarily unavailable.",
         "Spotify did not return track data for the dashboard."
       );
@@ -2578,8 +2606,7 @@ async function fetchNowPlaying({ forceMeta = false, force = false } = {}) {
       fetchRecommendations(trackKey);
     }
   } catch (_error) {
-    renderEmptyState(
-      elements.track,
+    renderTrackPanelEmptyState(
       "Track data could not load.",
       "Check the Spotify session and try again."
     );
@@ -2878,11 +2905,19 @@ async function togglePlayback() {
 function setupEventHandlers() {
   if (elements.overviewToggle) {
     elements.overviewToggle.addEventListener("click", () => {
+      if (window.innerWidth < 960) return;
       state.overviewMode = !state.overviewMode;
       applyOverviewMode();
     });
   }
-  window.addEventListener("resize", queueOverviewLayoutSync);
+  window.addEventListener("resize", () => {
+    if (window.innerWidth < 960 && state.overviewMode) {
+      state.overviewMode = false;
+      applyOverviewMode();
+      return;
+    }
+    queueOverviewLayoutSync();
+  });
   window.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && state.roomMode) {
       state.roomMode = false;

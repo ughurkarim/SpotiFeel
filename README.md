@@ -1,12 +1,8 @@
 # SpotiFeel
 
-Spotify Wrapped Anytime: connect Spotify and generate a polished personal music report for the last 4 weeks, last 6 months, or all-time listening.
-
 ## Live App
 
 [https://spoti-feel.vercel.app/](https://spoti-feel.vercel.app/)
-
-![SpotiFeel Wrapped Anytime product preview](docs/screenshots/wrapped-anytime.svg)
 
 ## Features
 

@@ -17,17 +17,19 @@
 </div>
 
 <header class="topbar">
-  <div class="logo" aria-label="SpotiFeel">SpotiFeel</div>
-  <nav>
-    <a href="#now-playing">Now Playing</a>
-    <a href="#recent-tracks">Day in Color</a>
-    <a href="#recommendations">Recommendations</a>
-    <a href="#playlists">Playlists</a>
-  </nav>
-  <div class="auth-buttons">
-    <button id="overview-toggle" class="btn btn-ghost" type="button" aria-pressed="false">Minimize</button>
-    <a id="login" class="btn" href="/login">Log in</a>
-    <a id="logout" class="btn btn-ghost" href="/logout">Log out</a>
+  <a class="brand-wordmark" href="#now-playing" aria-label="SpotiFeel home">SpotiFeel</a>
+  <div class="topbar-actions">
+    <nav aria-label="Primary navigation">
+      <a href="#now-playing">Now Playing</a>
+      <a href="#wrapped-anytime">Wrapped Anytime</a>
+      <a href="#recent-tracks">Day in Color</a>
+      <a href="#recommendations">Recommendations</a>
+      <a href="#playlists">Playlists</a>
+    </nav>
+    <div class="auth-buttons">
+      <a id="login" class="btn" href="/login">Log in</a>
+      <a id="logout" class="btn btn-ghost" href="/logout">Log out</a>
+    </div>
   </div>
 </header>
 
@@ -125,6 +127,96 @@
         <button id="room-toggle" class="hero-link hero-link--button" type="button" aria-pressed="false">Ambient Mode</button>
         <a id="spotify-link" class="hero-link hidden" href="#" target="_blank" rel="noreferrer">Open in Spotify</a>
       </div>
+    </div>
+  </section>
+
+  <section id="wrapped-anytime" class="dashboard-section wrapped-section">
+    <div class="wrapped-header">
+      <div>
+        <p class="section-kicker">Spotify Wrapped Anytime</p>
+        <h2>Wrapped Anytime</h2>
+        <p id="wrapped-context" class="section-context">Your top artists, songs, genres, and listening personality on demand.</p>
+      </div>
+      <div class="wrapped-ranges" role="tablist" aria-label="Wrapped time range">
+        <button class="wrapped-range active" type="button" data-range="short_term" aria-pressed="true">4 Weeks</button>
+        <button class="wrapped-range" type="button" data-range="medium_term" aria-pressed="false">6 Months</button>
+        <button class="wrapped-range" type="button" data-range="long_term" aria-pressed="false">All Time</button>
+      </div>
+    </div>
+
+    <p id="wrapped-status" class="wrapped-status" aria-live="polite"></p>
+
+    <div class="wrapped-layout">
+      <article id="wrapped-share-card" class="wrapped-share-card" aria-live="polite">
+        <p class="wrapped-card-kicker">Spotify Wrapped Anytime</p>
+        <h3>Connect Spotify</h3>
+        <p class="wrapped-card-summary">Generate a personal report once Spotify is connected.</p>
+      </article>
+
+      <div class="wrapped-insights">
+        <article class="wrapped-panel wrapped-personality-panel">
+          <p class="wrapped-panel-kicker">Listening Personality</p>
+          <h3 id="wrapped-personality-title">Waiting for your report</h3>
+          <p id="wrapped-personality-detail">Your personality appears after login.</p>
+        </article>
+
+        <article class="wrapped-panel wrapped-discovery-panel">
+          <p class="wrapped-panel-kicker">Discovery Score</p>
+          <div class="wrapped-score">
+            <strong id="wrapped-discovery-score">--</strong>
+            <span id="wrapped-discovery-label">No score yet</span>
+          </div>
+          <p id="wrapped-discovery-detail">Genre range, artist variety, and newer releases shape this score.</p>
+        </article>
+      </div>
+    </div>
+
+    <div class="wrapped-mood-grid" id="wrapped-mood-grid" aria-label="Mood profile"></div>
+
+    <div class="wrapped-results-grid">
+      <section class="wrapped-result-panel">
+        <div class="collection-header">
+          <div>
+            <p class="wrapped-panel-kicker">Artists</p>
+            <h3>Top Artists</h3>
+          </div>
+        </div>
+        <div id="wrapped-top-artists" class="wrapped-ranked-list"></div>
+      </section>
+
+      <section class="wrapped-result-panel">
+        <div class="collection-header">
+          <div>
+            <p class="wrapped-panel-kicker">Tracks</p>
+            <h3>Top Songs</h3>
+          </div>
+        </div>
+        <div id="wrapped-top-tracks" class="wrapped-track-row"></div>
+      </section>
+
+      <section class="wrapped-result-panel">
+        <div class="collection-header">
+          <div>
+            <p class="wrapped-panel-kicker">Genres</p>
+            <h3>Top Genres</h3>
+          </div>
+        </div>
+        <div id="wrapped-top-genres" class="wrapped-genre-list"></div>
+      </section>
+
+      <section class="wrapped-result-panel">
+        <div class="collection-header">
+          <div>
+            <p class="wrapped-panel-kicker">Recent Loops</p>
+            <h3>Most Replayed</h3>
+          </div>
+        </div>
+        <div id="wrapped-replayed-tracks" class="wrapped-ranked-list"></div>
+      </section>
+    </div>
+
+    <div class="wrapped-actions">
+      <button id="wrapped-image-share" class="btn" type="button">Share Image</button>
     </div>
   </section>
 

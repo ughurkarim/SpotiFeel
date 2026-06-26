@@ -5,17 +5,19 @@ from urllib.parse import urlencode, quote, quote_plus
 from flask import Flask, redirect, request, session, jsonify, send_from_directory
 from dotenv import load_dotenv
 
-load_dotenv()
+BASE_DIR = Path(__file__).resolve().parent
+load_dotenv(BASE_DIR.parent / ".env")
+load_dotenv(BASE_DIR / ".env", override=True)
 
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET", "dev")
-BASE_DIR = Path(__file__).resolve().parent
 CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
 CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
 REDIRECT_URI = os.getenv("SPOTIFY_REDIRECT_URI")
 REQUEST_TIMEOUT = 10
 CURRENT_PLAYBACK_TTL = 4
 USER_TASTE_TTL = 180
+WRAPPED_REPORT_TTL = 300
 AUDIO_FEATURE_FIELDS = ("energy", "tempo", "loudness", "valence", "danceability")
 DEBUG_MODE = os.getenv("FLASK_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}
 
@@ -40,6 +42,31 @@ LASTFM_API_KEY = os.getenv("LASTFM_API_KEY")
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
 CURRENT_PLAYBACK_CACHE = {}
 USER_TASTE_CACHE = {}
+WRAPPED_REPORT_CACHE = {}
+
+WRAPPED_TIME_RANGES = {
+    "short_term": {
+        "label": "Last 4 Weeks",
+        "slug": "4-weeks",
+        "summary_label": "four-week",
+        "spotify_value": "short_term",
+    },
+    "medium_term": {
+        "label": "Last 6 Months",
+        "slug": "6-months",
+        "summary_label": "six-month",
+        "spotify_value": "medium_term",
+    },
+    "long_term": {
+        "label": "All Time",
+        "slug": "all-time",
+        "summary_label": "all-time",
+        "spotify_value": "long_term",
+    },
+}
+
+def spotify_configured():
+    return bool(CLIENT_ID and CLIENT_SECRET and REDIRECT_URI)
 
 def auth_header():
     auth_str = f"{CLIENT_ID}:{CLIENT_SECRET}".encode("utf-8")
@@ -108,6 +135,8 @@ def ensure_token(force_refresh=False):
         return True
     refresh_token = session.get("refresh_token")
     if not refresh_token:
+        return False
+    if not spotify_configured():
         return False
     data = {"grant_type": "refresh_token", "refresh_token": refresh_token}
     r = http_post(TOKEN_URL, headers=auth_header(), data=data)
@@ -362,6 +391,355 @@ def summarize_taste_profile(profile):
     tempo_label = describe_tempo(audio_profile.get("tempo")).lower()
     mood_label = describe_mood(audio_profile.get("valence")).lower()
     return f"Your recent listening leans {lead_genre} with {energy_label} energy, a {tempo_label} pace, and a {mood_label} mood."
+
+def spotify_image_url(images, preferred_index=0):
+    if not isinstance(images, list) or not images:
+        return ""
+    image = images[min(preferred_index, len(images) - 1)] or {}
+    return image.get("url", "")
+
+def serialize_artist(artist):
+    artist = artist or {}
+    followers = artist.get("followers") or {}
+    return {
+        "id": artist.get("id"),
+        "name": artist.get("name") or "Unknown artist",
+        "genres": artist.get("genres") or [],
+        "image_url": spotify_image_url(artist.get("images") or []),
+        "spotify_url": (artist.get("external_urls") or {}).get("spotify", ""),
+        "followers": followers.get("total"),
+        "popularity": artist.get("popularity"),
+    }
+
+def serialize_track(track):
+    track = track or {}
+    album = track.get("album") or {}
+    artists = [
+        {"id": artist.get("id"), "name": artist.get("name") or "Unknown artist"}
+        for artist in track.get("artists") or []
+        if isinstance(artist, dict)
+    ]
+    images = album.get("images") or []
+    return {
+        "id": track.get("id"),
+        "uri": track.get("uri"),
+        "name": track.get("name") or "Unknown track",
+        "artists": artists,
+        "album": {
+            "id": album.get("id"),
+            "name": album.get("name") or "",
+            "images": images,
+            "release_date": album.get("release_date") or "",
+        },
+        "image_url": spotify_image_url(images),
+        "duration_ms": track.get("duration_ms"),
+        "explicit": track.get("explicit"),
+        "popularity": track.get("popularity"),
+        "release_year": release_year(track),
+        "external_urls": {
+            "spotify": (track.get("external_urls") or {}).get("spotify", ""),
+        },
+    }
+
+def artist_names(track):
+    return [artist.get("name") for artist in (track or {}).get("artists") or [] if artist.get("name")]
+
+def build_top_genres(top_artists):
+    genre_counts = Counter()
+    for artist in top_artists:
+        for genre in artist.get("genres") or []:
+            normalized = normalize_genre_seed(genre) or (genre or "").lower().strip()
+            if normalized:
+                genre_counts[normalized] += 1
+    return [
+        {
+            "name": genre,
+            "count": count,
+        }
+        for genre, count in genre_counts.most_common(12)
+    ]
+
+def infer_wrapped_audio_profile(top_genres):
+    haystack = " ".join([genre.get("name", "") for genre in top_genres]).lower()
+    profile = {
+        "energy": 0.54,
+        "tempo": 112,
+        "loudness": -8,
+        "valence": 0.5,
+        "danceability": 0.58,
+    }
+
+    if any(term in haystack for term in ("ambient", "classical", "piano", "study", "focus")):
+        profile.update({"energy": 0.26, "tempo": 82, "loudness": -12.8, "valence": 0.4, "danceability": 0.24})
+    elif any(term in haystack for term in ("jazz", "soul", "r-n-b", "r&b")):
+        profile.update({"energy": 0.44, "tempo": 96, "loudness": -9.8, "valence": 0.52, "danceability": 0.5})
+    elif any(term in haystack for term in ("indie", "folk", "acoustic", "chill")):
+        profile.update({"energy": 0.38, "tempo": 92, "loudness": -10.4, "valence": 0.46, "danceability": 0.4})
+    elif any(term in haystack for term in ("hip", "rap", "trap")):
+        profile.update({"energy": 0.76, "tempo": 136, "loudness": -6.2, "valence": 0.58, "danceability": 0.78})
+    elif any(term in haystack for term in ("edm", "dance", "house", "techno", "party")):
+        profile.update({"energy": 0.9, "tempo": 128, "loudness": -5, "valence": 0.72, "danceability": 0.84})
+    elif any(term in haystack for term in ("rock", "metal", "punk")):
+        profile.update({"energy": 0.82, "tempo": 122, "loudness": -5.8, "valence": 0.48, "danceability": 0.46})
+    elif any(term in haystack for term in ("country", "americana")):
+        profile.update({"energy": 0.52, "tempo": 104, "loudness": -8.5, "valence": 0.56, "danceability": 0.48})
+    return profile
+
+def build_replayed_tracks(recent_items, limit=5):
+    track_counts = Counter()
+    track_lookup = {}
+    for item in recent_items:
+        track = (item or {}).get("track") or {}
+        key = track.get("id") or track.get("uri")
+        if not key:
+            names = " ".join([track.get("name", ""), *artist_names(track)]).strip()
+            key = names.lower()
+        if not key:
+            continue
+        track_counts[key] += 1
+        track_lookup[key] = track
+
+    replayed = []
+    for key, count in track_counts.most_common(limit):
+        if count < 2 and replayed:
+            continue
+        replayed.append({
+            "track": serialize_track(track_lookup[key]),
+            "play_count": count,
+        })
+    return replayed
+
+def build_discovery_score(top_tracks, top_genres):
+    if not top_tracks:
+        return {
+            "score": 0,
+            "label": "Waiting for Data",
+            "detail": "Generate a report after Spotify has enough top tracks for this range.",
+            "parts": {},
+        }
+
+    total_tracks = len(top_tracks)
+    artist_mentions = [
+        artist.get("id") or artist.get("name")
+        for track in top_tracks
+        for artist in track.get("artists") or []
+        if artist.get("id") or artist.get("name")
+    ]
+    unique_artist_ratio = len(set(artist_mentions)) / max(1, len(artist_mentions))
+    genre_ratio = min(len(top_genres) / 12, 1)
+    current_year = int(time.strftime("%Y"))
+    release_years = [release_year(track) for track in top_tracks]
+    fresh_ratio = len([year for year in release_years if year and year >= current_year - 3]) / max(1, total_tracks)
+    popularities = [track.get("popularity") for track in top_tracks if track.get("popularity") is not None]
+    underground_ratio = 0.35
+    if popularities:
+        underground_ratio = clamp((100 - (sum(popularities) / len(popularities))) / 100, 0, 1)
+
+    score = round(
+        (
+            genre_ratio * 0.36
+            + unique_artist_ratio * 0.34
+            + fresh_ratio * 0.18
+            + underground_ratio * 0.12
+        )
+        * 100
+    )
+    if score >= 76:
+        label = "Deep Explorer"
+    elif score >= 58:
+        label = "Curious Curator"
+    elif score >= 38:
+        label = "Selective Explorer"
+    else:
+        label = "Comfort Listener"
+
+    return {
+        "score": score,
+        "label": label,
+        "detail": "Based on genre range, artist variety, newer releases, and how deep-cut your top tracks skew.",
+        "parts": {
+            "genre_variety": round(genre_ratio * 100),
+            "artist_variety": round(unique_artist_ratio * 100),
+            "freshness": round(fresh_ratio * 100),
+            "deep_cuts": round(underground_ratio * 100),
+        },
+    }
+
+def build_listening_personality(top_genres, discovery, audio_profile):
+    lead_genre = (top_genres[0]["name"] if top_genres else "").lower()
+    energy = (audio_profile or {}).get("energy", 0.54)
+    valence = (audio_profile or {}).get("valence", 0.5)
+    danceability = (audio_profile or {}).get("danceability", 0.58)
+    diversity = len(top_genres)
+    discovery_score = discovery.get("score", 0)
+
+    if diversity >= 10 and discovery_score >= 70:
+        return {
+            "title": "The Genre Nomad",
+            "detail": "You move across scenes quickly and let curiosity steer the queue.",
+        }
+    if energy >= 0.76 and danceability >= 0.7:
+        return {
+            "title": "The Aux Commander",
+            "detail": "Your report leans kinetic, confident, and ready to take over a room.",
+        }
+    if valence <= 0.36:
+        return {
+            "title": "The Midnight Curator",
+            "detail": "You collect mood, atmosphere, and songs that sound better after dark.",
+        }
+    if any(term in lead_genre for term in ("hip", "rap", "trap", "r-n-b", "r&b")):
+        return {
+            "title": "The Rhythm Loyalist",
+            "detail": "Your taste is built around bounce, cadence, and repeatable hooks.",
+        }
+    if any(term in lead_genre for term in ("indie", "folk", "acoustic", "alternative")):
+        return {
+            "title": "The Deep Cut Romantic",
+            "detail": "You gravitate toward texture, lyrics, and artists that feel handpicked.",
+        }
+    if any(term in lead_genre for term in ("rock", "metal", "punk")):
+        return {
+            "title": "The Volume Architect",
+            "detail": "Your listening has edge, momentum, and a clear sense of impact.",
+        }
+    if any(term in lead_genre for term in ("pop", "dance", "edm", "house")):
+        return {
+            "title": "The Main Character DJ",
+            "detail": "Your top songs are polished, vivid, and built for instant replay.",
+        }
+    return {
+        "title": "The Taste Architect",
+        "detail": "Your report balances familiar anchors with enough range to feel personal.",
+    }
+
+def build_wrapped_summary(time_meta, top_artists, top_tracks, top_genres, audio_profile):
+    lead_artist = (top_artists[0].get("name") if top_artists else "your top artists")
+    lead_track = (top_tracks[0].get("name") if top_tracks else "your top songs")
+    lead_genre = (top_genres[0]["name"] if top_genres else "a mixed palette")
+    energy_label = describe_energy((audio_profile or {}).get("energy")).lower()
+    mood_label = describe_mood((audio_profile or {}).get("valence")).lower()
+    tempo_label = describe_tempo((audio_profile or {}).get("tempo")).lower()
+    return (
+        f"Your {time_meta['summary_label']} listening is led by {lead_artist}, anchored in "
+        f"{lead_genre}, and runs {energy_label} with a {tempo_label} pace and {mood_label} mood. "
+        f"{lead_track} sits at the center of this report."
+    )
+
+def build_wrapped_report(headers, time_range):
+    time_meta = WRAPPED_TIME_RANGES.get(time_range, WRAPPED_TIME_RANGES["short_term"])
+    spotify_range = time_meta["spotify_value"]
+
+    user_res = http_get("https://api.spotify.com/v1/me", headers=headers)
+    user_payload = safe_json(user_res) or {}
+    display_name = user_payload.get("display_name") or user_payload.get("id") or "Your"
+
+    top_tracks_res = http_get(
+        "https://api.spotify.com/v1/me/top/tracks",
+        headers=headers,
+        params={"limit": 20, "time_range": spotify_range},
+    )
+    if top_tracks_res.status_code != 200:
+        return {
+            "error": "spotify_top_tracks_error",
+            "details": safe_json(top_tracks_res) or top_tracks_res.text,
+        }, top_tracks_res.status_code
+
+    top_artists_res = http_get(
+        "https://api.spotify.com/v1/me/top/artists",
+        headers=headers,
+        params={"limit": 20, "time_range": spotify_range},
+    )
+    if top_artists_res.status_code != 200:
+        return {
+            "error": "spotify_top_artists_error",
+            "details": safe_json(top_artists_res) or top_artists_res.text,
+        }, top_artists_res.status_code
+
+    recent_res = http_get(
+        "https://api.spotify.com/v1/me/player/recently-played",
+        headers=headers,
+        params={"limit": 50},
+    )
+
+    top_tracks = (safe_json(top_tracks_res) or {}).get("items", [])
+    top_artists = (safe_json(top_artists_res) or {}).get("items", [])
+    recent_items = (safe_json(recent_res) or {}).get("items", []) if recent_res.status_code == 200 else []
+    top_genres = build_top_genres(top_artists)
+
+    track_ids = [track.get("id") for track in top_tracks if track.get("id")]
+    track_features = fetch_audio_features(headers, track_ids[:20])
+    audio_profile = average_audio_profile([track_features.get(track_id) for track_id in track_ids])
+    mood_source = "spotify_audio_features" if audio_profile else "genre_signals"
+    if not audio_profile:
+        audio_profile = infer_wrapped_audio_profile(top_genres)
+
+    discovery = build_discovery_score(top_tracks, top_genres)
+    personality = build_listening_personality(top_genres, discovery, audio_profile)
+    summary = build_wrapped_summary(time_meta, top_artists, top_tracks, top_genres, audio_profile)
+    replayed_tracks = build_replayed_tracks(recent_items)
+
+    lead_artist = serialize_artist(top_artists[0]) if top_artists else None
+    lead_track = serialize_track(top_tracks[0]) if top_tracks else None
+    lead_genre = top_genres[0] if top_genres else {"name": "mixed", "count": 0}
+    share_text = (
+        f"{display_name}'s SpotiFeel {time_meta['label']}: {personality['title']}. "
+        f"Top artist: {lead_artist['name'] if lead_artist else 'n/a'}. "
+        f"Top song: {lead_track['name'] if lead_track else 'n/a'}. "
+        f"Top genre: {lead_genre['name']}. Discovery score: {discovery['score']}%."
+    )
+
+    return {
+        "generated_at": int(time.time()),
+        "time_range": time_meta,
+        "user": {
+            "display_name": display_name,
+            "image_url": spotify_image_url(user_payload.get("images") or []),
+            "spotify_url": (user_payload.get("external_urls") or {}).get("spotify", ""),
+        },
+        "top_artists": [serialize_artist(artist) for artist in top_artists[:10]],
+        "top_tracks": [serialize_track(track) for track in top_tracks[:10]],
+        "top_genres": top_genres,
+        "mood_profile": {
+            "source": mood_source,
+            "audio_profile": audio_profile,
+            "dna": build_mood_dna(audio_profile),
+        },
+        "listening_personality": personality,
+        "taste_summary": summary,
+        "most_replayed_tracks": replayed_tracks,
+        "discovery_score": discovery,
+        "share_card": {
+            "headline": f"{display_name}'s {time_meta['label']} Wrapped",
+            "kicker": "Spotify Wrapped Anytime",
+            "top_artist": lead_artist,
+            "top_track": lead_track,
+            "top_genre": lead_genre,
+            "personality": personality,
+            "discovery_score": discovery,
+            "summary": summary,
+            "share_text": share_text,
+        },
+        "data_note": "Spotify top-items are affinity rankings for the selected range; All Time uses Spotify's long-term signal, not exact lifetime play count.",
+    }, 200
+
+def resolve_wrapped_time_range(value):
+    requested_range = (value or "short_term").strip()
+    return requested_range if requested_range in WRAPPED_TIME_RANGES else "short_term"
+
+def get_wrapped_report_for_session(headers, time_range, force=False):
+    requested_range = resolve_wrapped_time_range(time_range)
+    cache_key = f"{session_cache_key()}:{requested_range}"
+    cached = WRAPPED_REPORT_CACHE.get(cache_key)
+    now = time.time()
+    if not force and cached and now - cached.get("ts", 0) < WRAPPED_REPORT_TTL:
+        return cached["report"], 200
+
+    report, status = build_wrapped_report(headers, requested_range)
+    if status == 200:
+        WRAPPED_REPORT_CACHE[cache_key] = {"ts": now, "report": report}
+        prune_cache(WRAPPED_REPORT_CACHE, WRAPPED_REPORT_TTL)
+    return report, status
 
 def build_track_snapshot(item, audio_profile):
     if not item or not audio_profile:
@@ -1025,6 +1403,11 @@ def select_playlist_tracks(candidates, features, taste_profile, options, target_
 
 @app.route("/login")
 def login():
+    if not spotify_configured():
+        return (
+            "Spotify OAuth is not configured. Set SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET, and SPOTIFY_REDIRECT_URI.",
+            500,
+        )
     oauth_state = secrets.token_urlsafe(24)
     session["oauth_state"] = oauth_state
     params = {
@@ -1038,6 +1421,11 @@ def login():
 
 @app.route("/callback")
 def callback():
+    if not spotify_configured():
+        return (
+            "Spotify OAuth is not configured. Set SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET, and SPOTIFY_REDIRECT_URI.",
+            500,
+        )
     code = request.args.get("code")
     oauth_error = request.args.get("error")
     oauth_error_description = request.args.get("error_description")
@@ -1071,7 +1459,18 @@ def callback():
 
 @app.route("/api/session")
 def whoami():
-    return jsonify({"authenticated": ensure_token()})
+    return jsonify({"authenticated": ensure_token(), "configured": spotify_configured()})
+
+@app.route("/api/wrapped")
+def api_wrapped():
+    if not spotify_configured():
+        return jsonify({"error": "spotify_not_configured"}), 500
+    if not ensure_token():
+        return jsonify({"error": "not_authenticated"}), 401
+
+    force = (request.args.get("force") or "").strip().lower() in {"1", "true", "yes"}
+    report, status = get_wrapped_report_for_session(spotify_headers(), request.args.get("time_range"), force=force)
+    return jsonify(report), status
 
 @app.route("/api/now-playing")
 def now_playing():
@@ -1501,9 +1900,12 @@ def lyrics_now():
     for candidate in candidate_titles:
         if not candidate:
             continue
-        lyrics_res = http_get(
-            f"https://api.lyrics.ovh/v1/{quote(artist_name, safe='')}/{quote(candidate, safe='')}"
-        )
+        try:
+            lyrics_res = http_get(
+                f"https://api.lyrics.ovh/v1/{quote(artist_name, safe='')}/{quote(candidate, safe='')}"
+            )
+        except requests.RequestException:
+            continue
         if lyrics_res.status_code != 200:
             continue
         lyrics_payload = safe_json(lyrics_res) or {}
@@ -1534,8 +1936,11 @@ def static_files(path):
 
 @app.route("/logout")
 def logout():
-    CURRENT_PLAYBACK_CACHE.pop(session_cache_key(), None)
-    USER_TASTE_CACHE.pop(session_cache_key(), None)
+    cache_key = session_cache_key()
+    CURRENT_PLAYBACK_CACHE.pop(cache_key, None)
+    USER_TASTE_CACHE.pop(cache_key, None)
+    for key in [key for key in WRAPPED_REPORT_CACHE if key.startswith(f"{cache_key}:")]:
+        WRAPPED_REPORT_CACHE.pop(key, None)
     session.clear()
     return redirect("/")
 

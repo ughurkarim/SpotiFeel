@@ -311,8 +311,11 @@ const state = {
   currentAudioProfile: null,
   nowPlayingPending: false,
   recentPending: false,
+  wrappedPending: false,
   activePlaylist: null,
   activeView: "card",
+  activeWrappedRange: "short_term",
+  wrappedReport: null,
   themeMode: "default",
   themeRequestKey: null,
   backdropRequestKey: null,
@@ -352,12 +355,26 @@ const elements = {
   recList: document.getElementById("rec-list"),
   playlistLinks: document.getElementById("playlist-links"),
   playlistStatus: document.getElementById("playlist-status"),
+  wrappedContext: document.getElementById("wrapped-context"),
+  wrappedStatus: document.getElementById("wrapped-status"),
+  wrappedShareCard: document.getElementById("wrapped-share-card"),
+  wrappedPersonalityTitle: document.getElementById("wrapped-personality-title"),
+  wrappedPersonalityDetail: document.getElementById("wrapped-personality-detail"),
+  wrappedDiscoveryScore: document.getElementById("wrapped-discovery-score"),
+  wrappedDiscoveryLabel: document.getElementById("wrapped-discovery-label"),
+  wrappedDiscoveryDetail: document.getElementById("wrapped-discovery-detail"),
+  wrappedMoodGrid: document.getElementById("wrapped-mood-grid"),
+  wrappedTopArtists: document.getElementById("wrapped-top-artists"),
+  wrappedTopTracks: document.getElementById("wrapped-top-tracks"),
+  wrappedTopGenres: document.getElementById("wrapped-top-genres"),
+  wrappedReplayedTracks: document.getElementById("wrapped-replayed-tracks"),
+  wrappedImageShare: document.getElementById("wrapped-image-share"),
+  wrappedRangeButtons: document.querySelectorAll(".wrapped-range[data-range]"),
   main: document.querySelector("main"),
   topbar: document.querySelector(".topbar"),
   sessionBanner: document.getElementById("session-banner"),
   sessionMessage: document.getElementById("session-message"),
   sessionLink: document.getElementById("session-link"),
-  overviewToggle: document.getElementById("overview-toggle"),
   playerBar: document.querySelector(".player-bar"),
   playerArtShell: document.getElementById("player-art-shell"),
   playerArt: document.getElementById("player-art"),
@@ -2233,6 +2250,512 @@ function renderRecommendationGroups(groups = []) {
   );
 }
 
+function setWrappedStatus(message = "", tone = "muted") {
+  if (!elements.wrappedStatus) return;
+  elements.wrappedStatus.textContent = message;
+  elements.wrappedStatus.style.color =
+    tone === "error" ? "#f2b8b2" : tone === "success" ? "var(--text-soft)" : "var(--muted)";
+}
+
+function syncWrappedRangeButtons() {
+  elements.wrappedRangeButtons.forEach((button) => {
+    const active = button.dataset.range === state.activeWrappedRange;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+}
+
+function getTrackImageUrl(track = null) {
+  return track?.image_url || track?.album?.images?.[0]?.url || "";
+}
+
+function getArtistImageUrl(artist = null) {
+  return artist?.image_url || artist?.images?.[0]?.url || "";
+}
+
+function getSpotifyUrl(item = null) {
+  return item?.spotify_url || item?.external_urls?.spotify || "";
+}
+
+function createWrappedRankedItem({ rank, imageUrl = "", title = "", detail = "", badge = "", href = "" }) {
+  const wrapper = document.createElement(href ? "a" : "article");
+  wrapper.className = "wrapped-ranked-item";
+  if (href) {
+    wrapper.href = href;
+    wrapper.target = "_blank";
+    wrapper.rel = "noreferrer";
+  }
+
+  const imageMarkup = imageUrl
+    ? `<img src="${escapeHtml(imageUrl)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">`
+    : `<span class="wrapped-ranked-placeholder" aria-hidden="true">${escapeHtml(String(rank || ""))}</span>`;
+
+  wrapper.innerHTML = `
+    <span class="wrapped-rank">${escapeHtml(String(rank || ""))}</span>
+    <span class="wrapped-ranked-art">${imageMarkup}</span>
+    <span class="wrapped-ranked-copy">
+      <strong>${escapeHtml(title || "Unknown")}</strong>
+      <span>${escapeHtml(detail || "")}</span>
+    </span>
+    ${badge ? `<span class="wrapped-ranked-badge">${escapeHtml(badge)}</span>` : ""}
+  `;
+  return wrapper;
+}
+
+function renderWrappedLoading() {
+  setWrappedStatus("Building your Wrapped Anytime report...");
+  if (elements.wrappedContext) {
+    elements.wrappedContext.textContent = "Pulling top artists, songs, genres, replay loops, and personality signals.";
+  }
+  if (elements.wrappedShareCard) {
+    elements.wrappedShareCard.classList.add("is-loading");
+    elements.wrappedShareCard.innerHTML = `
+      <p class="wrapped-card-kicker">Spotify Wrapped Anytime</p>
+      <h3>Generating report</h3>
+      <p class="wrapped-card-summary">Finding the shape of your listening history.</p>
+    `;
+  }
+  [elements.wrappedTopArtists, elements.wrappedTopGenres, elements.wrappedReplayedTracks].forEach((container) => {
+    if (!container) return;
+    container.innerHTML = `
+      <div class="wrapped-mini-skeleton"></div>
+      <div class="wrapped-mini-skeleton"></div>
+      <div class="wrapped-mini-skeleton"></div>
+    `;
+  });
+  renderSkeletonCards(elements.wrappedTopTracks, 4);
+}
+
+function renderWrappedSignedOut() {
+  state.wrappedReport = null;
+  syncWrappedRangeButtons();
+  setWrappedStatus("Connect Spotify to generate your report.");
+  if (elements.wrappedContext) {
+    elements.wrappedContext.textContent = "Your top artists, songs, genres, and listening personality on demand.";
+  }
+  if (elements.wrappedShareCard) {
+    elements.wrappedShareCard.classList.remove("is-loading");
+    elements.wrappedShareCard.innerHTML = `
+      <p class="wrapped-card-kicker">Spotify Wrapped Anytime</p>
+      <h3>Connect Spotify</h3>
+      <p class="wrapped-card-summary">Generate a personal report once Spotify is connected.</p>
+    `;
+  }
+  if (elements.wrappedPersonalityTitle) elements.wrappedPersonalityTitle.textContent = "Waiting for your report";
+  if (elements.wrappedPersonalityDetail) elements.wrappedPersonalityDetail.textContent = "Your personality appears after login.";
+  if (elements.wrappedDiscoveryScore) elements.wrappedDiscoveryScore.textContent = "--";
+  if (elements.wrappedDiscoveryLabel) elements.wrappedDiscoveryLabel.textContent = "No score yet";
+  if (elements.wrappedDiscoveryDetail) {
+    elements.wrappedDiscoveryDetail.textContent = "Genre range, artist variety, and newer releases shape this score.";
+  }
+  if (elements.wrappedMoodGrid) elements.wrappedMoodGrid.innerHTML = "";
+  renderEmptyState(elements.wrappedTopArtists, "No artists yet.", "Connect Spotify to load your top artists.");
+  renderEmptyState(elements.wrappedTopTracks, "No songs yet.", "Connect Spotify to load your top songs.");
+  renderEmptyState(elements.wrappedTopGenres, "No genres yet.", "Connect Spotify to load your genre mix.");
+  renderEmptyState(elements.wrappedReplayedTracks, "No replay loops yet.", "Recent repeat plays will appear here.");
+}
+
+function renderWrappedMood(dna = []) {
+  if (!elements.wrappedMoodGrid) return;
+  elements.wrappedMoodGrid.innerHTML = "";
+  if (!dna.length) {
+    renderEmptyState(elements.wrappedMoodGrid, "Mood profile unavailable.", "Spotify did not return enough signals yet.");
+    return;
+  }
+  dna.forEach((item) => {
+    const tile = document.createElement("article");
+    tile.className = "wrapped-mood-tile";
+    tile.innerHTML = `
+      <span>${escapeHtml(item.label || "")}</span>
+      <strong>${escapeHtml(item.value || "")}</strong>
+      <em>${escapeHtml(item.detail || "")}</em>
+    `;
+    elements.wrappedMoodGrid.appendChild(tile);
+  });
+}
+
+function renderWrappedGenres(genres = []) {
+  if (!elements.wrappedTopGenres) return;
+  elements.wrappedTopGenres.innerHTML = "";
+  if (!genres.length) {
+    renderEmptyState(elements.wrappedTopGenres, "No genres yet.", "Spotify did not return artist genres for this range.");
+    return;
+  }
+  const maxCount = Math.max(...genres.map((genre) => genre.count || 0), 1);
+  genres.slice(0, 8).forEach((genre, index) => {
+    const row = document.createElement("article");
+    row.className = "wrapped-genre-row";
+    const percent = Math.max(10, Math.round(((genre.count || 0) / maxCount) * 100));
+    row.innerHTML = `
+      <div>
+        <span>${String(index + 1).padStart(2, "0")}</span>
+        <strong>${escapeHtml(formatGenreLabel(genre.name || ""))}</strong>
+      </div>
+      <div class="wrapped-genre-meter" aria-hidden="true"><span style="width: ${percent}%"></span></div>
+    `;
+    elements.wrappedTopGenres.appendChild(row);
+  });
+}
+
+function renderWrappedArtists(artists = []) {
+  if (!elements.wrappedTopArtists) return;
+  elements.wrappedTopArtists.innerHTML = "";
+  if (!artists.length) {
+    renderEmptyState(elements.wrappedTopArtists, "No artists yet.", "Spotify did not return top artists for this range.");
+    return;
+  }
+  artists.slice(0, 6).forEach((artist, index) => {
+    const genres = (artist.genres || []).slice(0, 2).map(formatGenreLabel).join(" / ");
+    elements.wrappedTopArtists.appendChild(
+      createWrappedRankedItem({
+        rank: index + 1,
+        imageUrl: getArtistImageUrl(artist),
+        title: artist.name || "Unknown artist",
+        detail: genres || "Top artist",
+        badge: typeof artist.popularity === "number" ? `${artist.popularity}%` : "",
+        href: getSpotifyUrl(artist),
+      })
+    );
+  });
+}
+
+function renderWrappedTracks(tracks = []) {
+  if (!elements.wrappedTopTracks) return;
+  elements.wrappedTopTracks.innerHTML = "";
+  if (!tracks.length) {
+    renderEmptyState(elements.wrappedTopTracks, "No songs yet.", "Spotify did not return top songs for this range.");
+    return;
+  }
+  elements.wrappedTopTracks.appendChild(
+    createTrackRow(tracks.slice(0, 8), {
+      rowClass: "wrapped-card-row",
+      badge: (_track, index) => "",
+      detail: (track) => {
+        const year = track.release_year ? `${track.release_year}` : "";
+        return year ? `Released ${year}` : track.album?.name || "";
+      },
+    })
+  );
+}
+
+function renderWrappedReplays(replayed = []) {
+  if (!elements.wrappedReplayedTracks) return;
+  elements.wrappedReplayedTracks.innerHTML = "";
+  if (!replayed.length) {
+    renderEmptyState(elements.wrappedReplayedTracks, "No replay loops yet.", "Repeat plays from recently played tracks will appear here.");
+    return;
+  }
+  replayed.slice(0, 5).forEach((item, index) => {
+    const track = item.track || {};
+    elements.wrappedReplayedTracks.appendChild(
+      createWrappedRankedItem({
+        rank: index + 1,
+        imageUrl: getTrackImageUrl(track),
+        title: track.name || "Unknown track",
+        detail: getArtistLabel(track),
+        badge: `${item.play_count || 1}x`,
+        href: getSpotifyUrl(track),
+      })
+    );
+  });
+}
+
+function renderWrappedShareCard(report) {
+  if (!elements.wrappedShareCard) return;
+  const card = report?.share_card || {};
+  const topTrack = card.top_track || {};
+  const topArtist = card.top_artist || {};
+  const topGenre = card.top_genre || {};
+  const trackImage = getTrackImageUrl(topTrack);
+  const artistImage = getArtistImageUrl(topArtist);
+  const imageUrl = artistImage || trackImage;
+  elements.wrappedShareCard.classList.remove("is-loading");
+  elements.wrappedShareCard.innerHTML = `
+    <p class="wrapped-card-kicker">${escapeHtml(card.kicker || "Spotify Wrapped Anytime")}</p>
+    <h3>${escapeHtml(card.headline || "Your Wrapped Anytime")}</h3>
+    <p class="wrapped-card-summary">${escapeHtml(card.summary || report?.taste_summary || "")}</p>
+    <div class="wrapped-card-visual">
+      ${
+        imageUrl
+          ? `<img src="${escapeHtml(imageUrl)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">`
+          : '<span aria-hidden="true"></span>'
+      }
+      <div>
+        <span>Top Artist</span>
+        <strong>${escapeHtml(topArtist.name || "Unknown")}</strong>
+      </div>
+    </div>
+    <dl class="wrapped-card-stats">
+      <div><dt>Song</dt><dd>${escapeHtml(topTrack.name || "Unknown")}</dd></div>
+      <div><dt>Genre</dt><dd>${escapeHtml(formatGenreLabel(topGenre.name || ""))}</dd></div>
+      <div><dt>Type</dt><dd>${escapeHtml(card.personality?.title || "")}</dd></div>
+      <div><dt>Discovery</dt><dd>${escapeHtml(String(card.discovery_score?.score ?? "--"))}%</dd></div>
+    </dl>
+  `;
+}
+
+function renderWrappedReport(report) {
+  if (!report) {
+    renderWrappedSignedOut();
+    return;
+  }
+  state.wrappedReport = report;
+  syncWrappedRangeButtons();
+  setWrappedStatus(report.data_note || "", "success");
+  if (elements.wrappedContext) {
+    elements.wrappedContext.textContent = report.taste_summary || "Your Wrapped Anytime report is ready.";
+  }
+  if (elements.wrappedPersonalityTitle) {
+    elements.wrappedPersonalityTitle.textContent = report.listening_personality?.title || "Taste Architect";
+  }
+  if (elements.wrappedPersonalityDetail) {
+    elements.wrappedPersonalityDetail.textContent = report.listening_personality?.detail || "";
+  }
+  if (elements.wrappedDiscoveryScore) {
+    elements.wrappedDiscoveryScore.textContent = `${report.discovery_score?.score ?? "--"}%`;
+  }
+  if (elements.wrappedDiscoveryLabel) {
+    elements.wrappedDiscoveryLabel.textContent = report.discovery_score?.label || "Discovery Score";
+  }
+  if (elements.wrappedDiscoveryDetail) {
+    elements.wrappedDiscoveryDetail.textContent = report.discovery_score?.detail || "";
+  }
+  renderWrappedShareCard(report);
+  renderWrappedMood(report.mood_profile?.dna || []);
+  renderWrappedArtists(report.top_artists || []);
+  renderWrappedTracks(report.top_tracks || []);
+  renderWrappedGenres(report.top_genres || []);
+  renderWrappedReplays(report.most_replayed_tracks || []);
+}
+
+async function fetchWrappedReport({ force = false } = {}) {
+  if (state.wrappedPending || !state.authenticated) return;
+  state.wrappedPending = true;
+  renderWrappedLoading();
+  try {
+    const query = new URLSearchParams({
+      time_range: state.activeWrappedRange,
+    });
+    if (force) query.set("force", "1");
+    const { response, data } = await getJson(`/api/wrapped?${query.toString()}`);
+    if (response.status === 401 || data?.error === "not_authenticated") {
+      state.authenticated = false;
+      syncAuthButtons();
+      resetSignedOutUi();
+      showBanner("Your Spotify session expired. Log in again to generate Wrapped Anytime.", "Log In Again");
+      return;
+    }
+    if (!response.ok || data?.error) {
+      setWrappedStatus(
+        data?.error === "spotify_not_configured"
+          ? "Spotify OAuth is not configured for this deployment."
+          : "Wrapped Anytime could not load from Spotify right now.",
+        "error"
+      );
+      if (elements.wrappedShareCard) elements.wrappedShareCard.classList.remove("is-loading");
+      return;
+    }
+    renderWrappedReport(data);
+  } catch (_error) {
+    setWrappedStatus("Wrapped Anytime is unavailable right now.", "error");
+    if (elements.wrappedShareCard) elements.wrappedShareCard.classList.remove("is-loading");
+  } finally {
+    state.wrappedPending = false;
+  }
+}
+
+function drawRoundedRect(context, x, y, width, height, radius) {
+  const r = Math.min(radius, width / 2, height / 2);
+  context.beginPath();
+  context.moveTo(x + r, y);
+  context.arcTo(x + width, y, x + width, y + height, r);
+  context.arcTo(x + width, y + height, x, y + height, r);
+  context.arcTo(x, y + height, x, y, r);
+  context.arcTo(x, y, x + width, y, r);
+  context.closePath();
+}
+
+function drawWrappedText(context, text, x, y, maxWidth, lineHeight, maxLines = 4) {
+  const words = String(text || "").split(/\s+/).filter(Boolean);
+  const lines = [];
+  let line = "";
+
+  words.forEach((word) => {
+    const nextLine = line ? `${line} ${word}` : word;
+    if (context.measureText(nextLine).width <= maxWidth || !line) {
+      line = nextLine;
+      return;
+    }
+    lines.push(line);
+    line = word;
+  });
+  if (line) lines.push(line);
+
+  const visibleLines = lines.slice(0, maxLines);
+  if (lines.length > maxLines && visibleLines.length) {
+    let last = visibleLines[visibleLines.length - 1];
+    while (last.length > 0 && context.measureText(`${last}...`).width > maxWidth) {
+      last = last.slice(0, -1).trim();
+    }
+    visibleLines[visibleLines.length - 1] = `${last}...`;
+  }
+
+  visibleLines.forEach((lineText, index) => {
+    context.fillText(lineText, x, y + index * lineHeight);
+  });
+  return y + visibleLines.length * lineHeight;
+}
+
+function canvasBlob(canvas) {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) {
+        resolve(blob);
+      } else {
+        reject(new Error("image_export_failed"));
+      }
+    }, "image/png", 0.94);
+  });
+}
+
+function buildWrappedImageCanvas(report) {
+  const card = report?.share_card || {};
+  const canvas = document.createElement("canvas");
+  const context = canvas.getContext("2d");
+  const width = 1080;
+  const height = 1350;
+  canvas.width = width;
+  canvas.height = height;
+
+  const topTrack = card.top_track || {};
+  const topArtist = card.top_artist || {};
+  const topGenre = card.top_genre || {};
+  const discovery = card.discovery_score || {};
+  const personality = card.personality || {};
+  const headline = card.headline || "Your Wrapped Anytime";
+  const summary = card.summary || report?.taste_summary || "";
+  const artistName = topArtist.name || "Unknown";
+  const trackName = topTrack.name || "Unknown";
+  const genreName = formatGenreLabel(topGenre.name || "Mixed");
+  const score = `${discovery.score ?? "--"}%`;
+
+  const bg = context.createLinearGradient(0, 0, width, height);
+  bg.addColorStop(0, "#10151b");
+  bg.addColorStop(0.48, "#191427");
+  bg.addColorStop(1, "#090b11");
+  context.fillStyle = bg;
+  context.fillRect(0, 0, width, height);
+
+  const glowA = context.createRadialGradient(180, 170, 0, 180, 170, 460);
+  glowA.addColorStop(0, "rgba(159, 215, 202, 0.34)");
+  glowA.addColorStop(1, "rgba(159, 215, 202, 0)");
+  context.fillStyle = glowA;
+  context.fillRect(0, 0, width, height);
+
+  const glowB = context.createRadialGradient(910, 250, 0, 910, 250, 420);
+  glowB.addColorStop(0, "rgba(242, 199, 219, 0.28)");
+  glowB.addColorStop(1, "rgba(242, 199, 219, 0)");
+  context.fillStyle = glowB;
+  context.fillRect(0, 0, width, height);
+
+  context.save();
+  drawRoundedRect(context, 74, 78, 932, 1194, 54);
+  context.fillStyle = "rgba(255, 255, 255, 0.07)";
+  context.fill();
+  context.strokeStyle = "rgba(255, 255, 255, 0.18)";
+  context.lineWidth = 2;
+  context.stroke();
+  context.restore();
+
+  context.fillStyle = "#9fd7ca";
+  context.font = "700 30px Poppins, Arial, sans-serif";
+  context.fillText("SPOTIFEEL", 124, 166);
+
+  context.fillStyle = "#f8f7fb";
+  context.font = "800 84px Poppins, Arial, sans-serif";
+  drawWrappedText(context, headline, 124, 280, 820, 84, 3);
+
+  context.fillStyle = "#e5e2ed";
+  context.font = "400 30px Poppins, Arial, sans-serif";
+  drawWrappedText(context, summary, 124, 520, 790, 44, 4);
+
+  const statCards = [
+    ["Top Artist", artistName],
+    ["Top Song", trackName],
+    ["Top Genre", genreName],
+    ["Discovery", score],
+  ];
+  statCards.forEach(([label, value], index) => {
+    const x = 124 + (index % 2) * 416;
+    const y = 740 + Math.floor(index / 2) * 168;
+    drawRoundedRect(context, x, y, 370, 126, 28);
+    context.fillStyle = "rgba(255, 255, 255, 0.09)";
+    context.fill();
+    context.fillStyle = "#a9a8b8";
+    context.font = "700 22px Poppins, Arial, sans-serif";
+    context.fillText(label.toUpperCase(), x + 26, y + 42);
+    context.fillStyle = "#f8f7fb";
+    context.font = "700 32px Poppins, Arial, sans-serif";
+    drawWrappedText(context, value, x + 26, y + 86, 318, 36, 1);
+  });
+
+  drawRoundedRect(context, 124, 1100, 790, 112, 30);
+  context.fillStyle = "rgba(159, 215, 202, 0.14)";
+  context.fill();
+  context.fillStyle = "#9fd7ca";
+  context.font = "700 24px Poppins, Arial, sans-serif";
+  context.fillText("LISTENING PERSONALITY", 154, 1142);
+  context.fillStyle = "#f8f7fb";
+  context.font = "800 38px Poppins, Arial, sans-serif";
+  drawWrappedText(context, personality.title || "Taste Architect", 154, 1190, 720, 42, 1);
+
+  context.fillStyle = "rgba(255, 255, 255, 0.55)";
+  context.font = "500 24px Poppins, Arial, sans-serif";
+  context.fillText("spotifeel.app", 124, 1260);
+
+  return canvas;
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 500);
+}
+
+async function shareWrappedImage() {
+  if (!state.wrappedReport) {
+    setWrappedStatus("Generate a report before sharing an image.", "error");
+    return;
+  }
+
+  try {
+    setWrappedStatus("Creating your share image...");
+    const canvas = buildWrappedImageCanvas(state.wrappedReport);
+    const blob = await canvasBlob(canvas);
+    const filename = `spotifeel-${state.activeWrappedRange}.png`;
+    const file = new File([blob], filename, { type: "image/png" });
+
+    if (navigator.canShare?.({ files: [file] }) && navigator.share) {
+      await navigator.share({
+        title: state.wrappedReport?.share_card?.headline || "SpotiFeel Wrapped Anytime",
+        files: [file],
+      });
+      setWrappedStatus("Image share sheet opened.", "success");
+      return;
+    }
+
+    downloadBlob(blob, filename);
+    setWrappedStatus("Image downloaded.", "success");
+  } catch (_error) {
+    setWrappedStatus("Image sharing failed. Try again after regenerating the report.", "error");
+  }
+}
+
 function resetSignedOutUi() {
   state.currentItem = null;
   state.currentTrackKey = null;
@@ -2294,6 +2817,7 @@ function resetSignedOutUi() {
   }
   setPlaylistStatus("Log in before creating playlists.");
   setPlaylistCardsDisabled(false);
+  renderWrappedSignedOut();
 }
 
 async function getJson(url, options) {
@@ -2310,6 +2834,13 @@ async function getJson(url, options) {
 async function syncSession() {
   try {
     const { response, data } = await getJson("/api/session");
+    if (response.ok && data?.configured === false) {
+      state.authenticated = false;
+      syncAuthButtons();
+      showBanner("Spotify OAuth is not configured. Add the Spotify credentials before logging in.");
+      resetSignedOutUi();
+      return;
+    }
     const authenticated = response.ok && !!data?.authenticated;
     state.authenticated = authenticated;
     syncAuthButtons();
@@ -2322,6 +2853,9 @@ async function syncSession() {
 
     showBanner("");
     setPlaylistStatus("");
+    if (!state.wrappedReport) {
+      fetchWrappedReport({ force: true });
+    }
     if (!state.currentItem) {
       await Promise.all([fetchNowPlaying({ forceMeta: true, force: true }), fetchRecentTracks({ force: true })]);
     }
@@ -2903,13 +3437,6 @@ async function togglePlayback() {
 }
 
 function setupEventHandlers() {
-  if (elements.overviewToggle) {
-    elements.overviewToggle.addEventListener("click", () => {
-      if (window.innerWidth < 960) return;
-      state.overviewMode = !state.overviewMode;
-      applyOverviewMode();
-    });
-  }
   window.addEventListener("resize", () => {
     if (window.innerWidth < 960 && state.overviewMode) {
       state.overviewMode = false;
@@ -2940,6 +3467,26 @@ function setupEventHandlers() {
       setNowView(button.dataset.view || "card");
     });
   });
+
+  elements.wrappedRangeButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      const nextRange = button.dataset.range || "short_term";
+      if (nextRange === state.activeWrappedRange && state.wrappedReport) return;
+      state.activeWrappedRange = nextRange;
+      state.wrappedReport = null;
+      syncWrappedRangeButtons();
+      if (!state.authenticated) {
+        renderWrappedSignedOut();
+        showBanner("Connect Spotify to generate Wrapped Anytime.", "Connect Spotify");
+        return;
+      }
+      fetchWrappedReport({ force: true });
+    });
+  });
+
+  if (elements.wrappedImageShare) {
+    elements.wrappedImageShare.addEventListener("click", shareWrappedImage);
+  }
 
   if (elements.roomToggle) {
     elements.roomToggle.addEventListener("click", () => {
@@ -2974,6 +3521,8 @@ async function init() {
   applyOverviewMode();
   setupEventHandlers();
   syncAuthButtons();
+  syncWrappedRangeButtons();
+  renderWrappedSignedOut();
   prepareVisualizerProfile("default");
   paintVisualizer(0);
   paintVinylRotation();

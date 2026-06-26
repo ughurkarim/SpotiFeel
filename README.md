@@ -1,9 +1,35 @@
 # SpotiFeel
 
+Spotify Wrapped Anytime: connect Spotify and generate a polished personal music report for the last 4 weeks, last 6 months, or all-time listening.
+
+![SpotiFeel Wrapped Anytime product preview](docs/screenshots/wrapped-anytime.svg)
+
+## Vercel Deployment
+
+This project is set up to run on Vercel with the Flask backend in `backend/app.py`. The included `vercel.json` routes all requests through that app.
+
+Add these environment variables in Vercel:
+
+```text
+SPOTIFY_CLIENT_ID=
+SPOTIFY_CLIENT_SECRET=
+SPOTIFY_REDIRECT_URI=https://your-vercel-domain.vercel.app/callback
+FLASK_SECRET=
+LASTFM_API_KEY=
+YOUTUBE_API_KEY=
+OPENAI_API_KEY=
+```
+
+The Spotify Developer Dashboard must include the exact same callback URL:
+
+```text
+https://your-vercel-domain.vercel.app/callback
+```
+
 ## Features
 
 - Spotify OAuth login with session refresh
-- Wrapped Anytime dashboard with 3 ranges: 4 weeks, 6 months, all time
+- Wrapped Anytime dashboard with 4 week, 6 month, and all-time reports
 - Top artists, top songs, top genres, mood profile, listening personality, replay loops, and discovery score
 - Shareable PNG image card with native share/download fallback
 - Live now-playing view with album-art theming, lyrics, YouTube search, and playback controls
@@ -15,50 +41,11 @@
 - Flask backend
 - Vanilla JavaScript, HTML, and CSS frontend
 - Spotify Web API
-- Vercel Python deployment config
-
-## Local Setup
-
-1. Create a Spotify app at the Spotify Developer Dashboard.
-2. Add this redirect URI to the Spotify app exactly:
-
-```text
-http://127.0.0.1:5001/callback
-```
-
-3. Create a local environment file:
-
-```bash
-cp .env.example .env
-```
-
-4. Fill in:
-
-```text
-SPOTIFY_CLIENT_ID=
-SPOTIFY_CLIENT_SECRET=
-SPOTIFY_REDIRECT_URI=http://127.0.0.1:5001/callback
-FLASK_SECRET=
-```
-
-5. Install and run:
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r backend/requirements.txt
-python backend/app.py
-```
-
-6. Open:
-
-```text
-http://127.0.0.1:5001
-```
+- Vercel Python deployment
 
 ## Spotify Scopes
 
-SpotiFeel currently asks for:
+SpotiFeel asks for:
 
 ```text
 user-read-currently-playing
@@ -83,15 +70,31 @@ user-top-read
 - `GET /api/recently-played` loads recent listening
 - `POST /api/create-playlist/<type>` creates a Spotify playlist
 
-## Deployment Notes
+## Local Development
 
-The included `vercel.json` routes all requests to `backend/app.py`. In Vercel, add the same environment variables from `.env.example`, then set `SPOTIFY_REDIRECT_URI` to your deployed callback URL:
+Local setup is only needed when testing changes before pushing to Vercel.
+
+Use a local callback URL in the Spotify Developer Dashboard:
 
 ```text
-https://your-domain.vercel.app/callback
+http://127.0.0.1:5001/callback
 ```
 
-That exact URL must also be added to the Spotify app redirect URI list.
+Then run:
+
+```bash
+cp .env.example .env
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r backend/requirements.txt
+.venv/bin/flask --app backend.app:app run --host 0.0.0.0 --port 5001
+```
+
+Open:
+
+```text
+http://127.0.0.1:5001
+```
 
 ## Product Roadmap
 
@@ -104,7 +107,7 @@ That exact URL must also be added to the Spotify app redirect URI list.
 
 ## Troubleshooting
 
-- `spotify_not_configured`: `.env` is missing Spotify credentials or redirect URI.
+- `spotify_not_configured`: Vercel is missing Spotify credentials or the redirect URI.
 - `Invalid state parameter`: cookies/session changed during OAuth; retry login from the same browser.
-- Spotify redirect mismatch: the `.env` value and Spotify Developer Dashboard URI must match exactly.
+- Spotify redirect mismatch: the Vercel environment variable and Spotify Developer Dashboard URI must match exactly.
 - Empty top tracks/artists: the Spotify account may not have enough listening history for that range.

@@ -1,11 +1,5 @@
 # SpotiFeel
 
-Spotify Wrapped Anytime: connect Spotify and generate a polished personal music report for the last 4 weeks, last 6 months, or all-time listening.
-
-![SpotiFeel Wrapped Anytime product preview](docs/screenshots/wrapped-anytime.svg)
-
-The preview above uses mock text so the repo can show the product direction without exposing private Spotify data. Capture a real logged-in screenshot after configuring OAuth.
-
 ## Features
 
 - Spotify OAuth login with session refresh

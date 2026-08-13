@@ -6,8 +6,6 @@ I built it with Python, Flask, and vanilla JavaScript, using Spotify as the main
 
 **Live App:** https://spoti-feel.vercel.app/
 
-![SpotiFeel Wrapped Anytime](docs/screenshots/wrapped-anytime.svg)
-
 ## Features
 
 - Live now-playing view with album artwork, lyrics, playback controls, and dynamic themes

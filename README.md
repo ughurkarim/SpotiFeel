@@ -1,150 +1,239 @@
 # SpotiFeel
 
-SpotiFeel turns a listener's Spotify data into a reactive now-playing experience, on-demand listening analytics, explainable personalized recommendations, and custom Spotify playlists. It is a Flask application with a vanilla JavaScript frontend; it does not proxy Spotify credentials or tokens to browser code.
+SpotiFeel is a full-stack music platform that turns Spotify listening data into personalized recommendations, playlists, listening reports, and a reactive now-playing experience.
 
-[Live app](https://spoti-feel.vercel.app/) · [Wrapped Anytime preview](docs/screenshots/wrapped-anytime.svg)
+I built it with Python, Flask, and vanilla JavaScript, using Spotify as the main data source along with Last.fm, YouTube, and lyrics.ovh.
 
-![SpotiFeel Wrapped Anytime product preview](docs/screenshots/wrapped-anytime.svg)
+**Live App:** https://spoti-feel.vercel.app/
 
-## What it includes
+![SpotiFeel Wrapped Anytime](docs/screenshots/wrapped-anytime.svg)
 
-- Live now-playing card, vinyl, and lyrics views with artwork-driven themes
-- Wrapped Anytime reports for Spotify's short-, medium-, and long-term affinity ranges
-- Top artists, tracks, genres, mood DNA, listening personality, replay loops, and discovery score
-- Recommendations explained with labels such as `same mood`, `higher energy`, `slower burn`, `artist orbit`, and `new discovery`
-- Personalized private playlists with familiarity, discovery, energy, artist-variety, explicit-content, and decade controls
-- A Day in Color listening timeline and shareable Wrapped PNG generation
+## Features
 
-## Architecture
+- Live now-playing view with album artwork, lyrics, playback controls, and dynamic themes
+- Personalized song recommendations based on listening history, artists, genres, and track characteristics
+- Custom Spotify playlist generation with controls for discovery, familiarity, energy, artist variety, explicit content, and decade
+- **Wrapped Anytime** reports for the last 4 weeks, 6 months, and long-term listening data
+- Top artists, tracks, genres, replay loops, mood analysis, listening personality, and discovery score
+- **Day in Color**, a visual timeline of recently played music
+- Shareable Wrapped-style reports
+- Spotify playback control directly through SpotiFeel
 
-```text
-Browser (HTML/CSS + vanilla ES modules)
-  ├─ js/api.js             API + CSRF transport
-  ├─ js/state.js           shared UI/session state
-  ├─ js/player.js          playback presentation helpers
-  ├─ js/recommendations.js recommendation response helpers
-  ├─ js/playlists.js       playlist request normalization
-  ├─ js/wrapped.js         Wrapped export helper
-  └─ js/theme.js           theme normalization
-             │
-             ▼
-Flask API (app.py entry point)
-  ├─ routes/auth.py             OAuth/session boundary
-  ├─ routes/playback.py         playback mutations
-  ├─ routes/recommendations.py  recommendation delivery
-  ├─ routes/playlists.py        playlist creation boundary
-  └─ routes/wrapped.py          report delivery
-             │
-             ▼
-Personalization and reporting
-  ├─ recommendations/ranking.py   pure similarity/ranking/filtering logic
-  ├─ recommendations/playlists.py playlist ranking public surface
-  ├─ recommendations/taste_profile.py taste-summary presentation
-  ├─ wrapped/personality.py        pure discovery/personality scoring
-  ├─ wrapped/report.py             Wrapped time-range contracts
-  └─ core.py                       taste, playlist, and report orchestration
-             │
-             ▼
-Integration services
-  ├─ services/spotify.py   centralized HTTP transport
-  ├─ services/lastfm.py    cached track tags
-  ├─ services/lyrics.py    cached lyrics lookup
-  └─ services/youtube.py   cached video/search resolution
-             │
-             ▼
-Spotify + Last.fm + lyrics.ovh + YouTube
-```
+## Tech Stack
 
-Optional integrations fail independently. A missing lyric or video result does not block now-playing, theming, or Spotify data. `/api/track-metadata` aggregates theme/genre, lyrics, and YouTube data into one browser request while retaining separate provider results.
+### Frontend
+- JavaScript
+- HTML/CSS
+- Canvas API
 
-## Recommendation model
+### Backend
+- Python
+- Flask
+- Redis
+- REST APIs
 
-Recommendations use both the currently playing track and the listener's recent and top Spotify data. The pipeline builds a taste profile from recent tracks, top tracks, top artists, artist genres, known artists, and averaged audio features.
+### APIs
+- Spotify Web API
+- Last.fm API
+- YouTube Data API
+- lyrics.ovh
+
+### Deployment
+- Vercel
+- Upstash Redis
+
+## How It Works
+
+SpotiFeel uses a Flask backend to handle authentication, Spotify requests, recommendations, playlist creation, playback, and listening reports.
+
+The frontend is split into JavaScript modules for API requests, playback, recommendations, playlists, Wrapped reports, shared state, and theming.
 
 ```text
-candidate score =
-    audio similarity
-  + familiarity/discovery weighting
-  + popularity adjustment
-  + artist-variety adjustment
-  + explicit-content constraint
-  + era constraint
+Frontend
+   |
+   v
+Flask API
+   |
+   +-- Authentication
+   +-- Playback
+   +-- Recommendations
+   +-- Playlists
+   +-- Wrapped
+   |
+   v
+Spotify / Last.fm / YouTube / lyrics.ovh
 ```
 
-The ranker creates separate lanes for close continuations, similar moods in a different genre, familiar favorites, and deep cuts. It deduplicates candidates across lanes and varies artist exposure. Spotify artist/search strategies and Last.fm similarity remain graceful fallbacks when the primary candidate source is sparse. Clean mode and decade playlists use hard eligibility constraints; balanced/explicit modes retain the existing weighted behavior.
+The backend is organized into route, service, recommendation, and reporting modules so API integrations and ranking logic stay separate from request handling.
 
-Spotify audio features shape similarity when available. Genre and listening-history signals provide fallbacks, so an unavailable optional provider does not empty the entire recommendation surface.
+## Recommendations
 
-## Engineering decisions
+Recommendations use the current track along with the user's recent tracks, top tracks, top artists, genres, and available audio data.
 
-- **OAuth:** Spotify authorization-code OAuth retains a cryptographically random, one-time `state` value. The callback validates it with a constant-time comparison before exchanging the code.
-- **Server-side sessions:** the cookie contains only a signed opaque session ID. Access and refresh tokens live in SQLite for local development/tests and Redis in production.
-- **CSRF:** `/api/session` supplies a per-session CSRF token. The shared browser transport sends it on every POST, PUT, PATCH, and DELETE request, and Flask rejects missing or mismatched tokens before route code runs.
-- **Cookies and secrets:** production requires a secret of at least 32 characters and Redis. Cookies are `HttpOnly`, `Secure` in production/HTTPS, and `SameSite=Lax`. There is no static development-secret fallback.
-- **Caching:** current playback uses a short four-second cache; user taste uses three minutes; Wrapped reports use five minutes. Public track audio features, Last.fm tags, lyrics, video resolution, and Spotify genre seeds use longer resource-appropriate TTLs.
-- **Failure handling:** provider payloads and exception strings are logged internally, not returned to the UI. Routes return stable error codes, safe messages, and appropriate 4xx/5xx statuses.
-- **Frontend synchronization:** polling intervals and pending-request guards prevent overlapping now-playing/history work. Track changes reset dependent UI state once, then request aggregated metadata and recommendations.
-- **Wrapped sharing:** image generation remains browser-side with Canvas, native sharing when available, and a PNG download fallback.
+Candidates are ranked using a combination of:
 
-## Local setup
+- Track similarity
+- Familiarity vs. discovery preference
+- Artist variety
+- Popularity
+- Genre signals
+- Explicit-content preference
+- Decade filters
 
-1. Create a Spotify application and set its callback to `http://127.0.0.1:5001/callback`.
-2. Copy `.env.example` to `backend/.env` and fill in the required values.
-3. Install and run:
+The system also groups recommendations into different types, including close matches, familiar tracks, discoveries, and tracks from related artists.
+
+If one data source is unavailable, SpotiFeel falls back to other Spotify and Last.fm signals instead of failing the entire recommendation request.
+
+## Authentication and Security
+
+SpotiFeel uses Spotify OAuth 2.0 for authentication.
+
+Spotify access and refresh tokens stay on the server instead of being exposed to frontend JavaScript. Production sessions are stored in Redis, while the browser only receives a session cookie.
+
+The app also includes:
+
+- OAuth state validation
+- CSRF protection for state-changing requests
+- `HttpOnly` and `SameSite` session cookies
+- Secure cookies in production
+- Server-side token refresh
+- Environment-based secret management
+- Safe API error responses
+
+## Caching and Reliability
+
+Frequently requested Spotify and third-party data is cached to reduce unnecessary API calls.
+
+Optional integrations are handled independently. For example, a failed lyrics or YouTube request will not prevent Spotify playback data from loading.
+
+The frontend also prevents overlapping polling requests while the currently playing track changes.
+
+## Local Development
+
+### 1. Clone the repository
+
+```bash
+git clone https://github.com/ughurkarim/SpotiFeel.git
+cd SpotiFeel
+```
+
+### 2. Create a virtual environment
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
+```
+
+### 3. Install dependencies
+
+```bash
 pip install -r backend/requirements.txt
+```
+
+### 4. Configure environment variables
+
+Copy the example environment file:
+
+```bash
+cp .env.example backend/.env
+```
+
+Add your Spotify credentials:
+
+```env
+SPOTIFY_CLIENT_ID=your_client_id
+SPOTIFY_CLIENT_SECRET=your_client_secret
+SPOTIFY_REDIRECT_URI=http://127.0.0.1:5001/callback
+```
+
+Optional integrations:
+
+```env
+LASTFM_API_KEY=your_key
+YOUTUBE_API_KEY=your_key
+```
+
+### 5. Run the app
+
+```bash
 python backend/app.py
 ```
 
-`LASTFM_API_KEY` and `YOUTUBE_API_KEY` are optional. Without them, SpotiFeel uses Spotify genre signals and a YouTube search link.
-
-Production must set:
+Then open:
 
 ```text
+http://127.0.0.1:5001
+```
+
+## Production Environment
+
+Production requires:
+
+```env
 SPOTIFEEL_ENV=production
-FLASK_SECRET=<cryptographically-random value of at least 32 characters>
-REDIS_URL=<TLS Redis connection URL>
-SPOTIFY_CLIENT_ID=...
-SPOTIFY_CLIENT_SECRET=...
-SPOTIFY_REDIRECT_URI=https://your-host/callback
+FLASK_SECRET=your_random_secret
+REDIS_URL=your_redis_url
+
+SPOTIFY_CLIENT_ID=your_client_id
+SPOTIFY_CLIENT_SECRET=your_client_secret
+SPOTIFY_REDIRECT_URI=https://your-domain.com/callback
 ```
 
-Vercel exposes `VERCEL_ENV=production`, which activates the same startup checks automatically.
+`FLASK_SECRET` should be a randomly generated value of at least 32 characters.
 
-## Spotify scopes
+SpotiFeel uses Redis-backed sessions in production and SQLite sessions for local development and testing.
 
-```text
-user-read-currently-playing
-user-read-playback-state
-user-modify-playback-state
-playlist-modify-private
-playlist-modify-public
-user-read-recently-played
-user-library-read
-user-top-read
-```
+## Testing
 
-Spotify's `short_term`, `medium_term`, and `long_term` values power the 4-week, 6-month, and All Time reports. The All Time view is Spotify's long-term affinity ranking, not an exact lifetime play count.
-
-## Tests
+Run the test suite with:
 
 ```bash
 python -m pytest backend/tests -q
 ```
 
-The suite covers audio similarity, familiarity/discovery weighting, explicit and decade constraints, genre and playlist-option normalization, deduplication, artist variety, Wrapped discovery/personality calculations, signed-out endpoint behavior, OAuth state validation, opaque session cookies, and CSRF enforcement.
+Tests cover:
 
-## Main endpoints
+- Recommendation ranking
+- Familiarity and discovery weighting
+- Explicit-content and decade filters
+- Artist diversity and deduplication
+- Wrapped calculations
+- OAuth state validation
+- Session behavior
+- CSRF protection
+- Authentication requirements
 
-- `GET /api/session`
-- `GET /api/wrapped?time_range=short_term|medium_term|long_term`
-- `GET /api/now-playing`
-- `GET /api/track-metadata`
-- `GET /api/recently-played`
-- `GET /api/recommendations`
-- `POST /api/create-playlist/<type>`
-- `POST /api/player/toggle`
-- `PUT /api/player/play`
+## Main API Routes
+
+```text
+GET  /api/session
+GET  /api/now-playing
+GET  /api/recently-played
+GET  /api/recommendations
+GET  /api/track-metadata
+GET  /api/wrapped
+POST /api/create-playlist/<type>
+POST /api/player/toggle
+PUT  /api/player/play
+```
+
+## Spotify Permissions
+
+SpotiFeel requests the permissions needed to read listening data, control playback, and create playlists:
+
+```text
+user-read-currently-playing
+user-read-playback-state
+user-modify-playback-state
+user-read-recently-played
+user-library-read
+user-top-read
+playlist-modify-private
+playlist-modify-public
+```
+
+## Why I Built It
+
+I started SpotiFeel because I wanted to build something around Spotify data that went beyond displaying top songs and artists.
+
+The project grew into a way to experiment with recommendation systems, API integration, OAuth, caching, session security, and data-driven frontend experiences while building something I would actually use.

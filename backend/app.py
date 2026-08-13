@@ -3,7 +3,12 @@
 Application behavior is composed in ``core`` while this stable module remains
 the Vercel and local-development entry point.
 """
+import sys
+from pathlib import Path
 
+BACKEND_DIR = Path(__file__).resolve().parent
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
 from core import app
 from routes.auth import bp as auth_blueprint
 from routes.playback import bp as playback_blueprint

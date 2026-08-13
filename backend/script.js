@@ -1,3 +1,12 @@
+import { apiRequest, setCsrfToken } from "./js/api.js";
+import { state } from "./js/state.js";
+import { formatDuration as fmt, getTrackKey, getArtistLabel } from "./js/player.js";
+import { buildPlaylistPayload } from "./js/playlists.js";
+import { hasRecommendationGroups } from "./js/recommendations.js";
+import { canvasBlob } from "./js/wrapped.js";
+import { normalizeGenreName } from "./js/theme.js";
+import { buildLyricLines, buildLyricTimeline, parseSyncedLyrics } from "./js/lyrics.js";
+
 const POLL_INTERVALS = {
   session: 60000,
   nowPlaying: 5000,
@@ -300,69 +309,20 @@ const THEME_PALETTES = {
 
 const DEFAULT_THEME = THEME_PALETTES.default;
 
-const state = {
-  authenticated: false,
-  currentItem: null,
-  currentTrackKey: null,
-  activeCardKey: null,
-  currentGenre: null,
-  currentTags: [],
-  currentMood: null,
-  currentAudioProfile: null,
-  nowPlayingPending: false,
-  recentPending: false,
-  wrappedPending: false,
-  activePlaylist: null,
-  activeView: "card",
-  activeWrappedRange: "short_term",
-  wrappedReport: null,
-  themeMode: "default",
-  themeRequestKey: null,
-  backdropRequestKey: null,
-  currentLyricsLines: [],
-  lyricTimeline: [],
-  lyricLineElements: [],
-  activeLyricLineIndex: -1,
-  lyricsInteractive: false,
-  visualizerProfile: [],
-  lastNowPlayingRequestAt: 0,
-  lastRecentRequestAt: 0,
-  playRequestToken: 0,
-  previousTrackSnapshot: null,
-  overviewMode: false,
-  roomMode: false,
-  roomPreviousView: null,
-  overviewPreviousView: null,
-  overviewScrollY: 0,
-  preferences: {
-    reducedMotion: window.matchMedia("(prefers-reduced-motion: reduce)").matches,
-    sessionMode: "adaptive",
-  },
-  playlistOptions: {
-    familiarity: 0.58,
-    energyBias: 0,
-    artistVariety: 0.66,
-    explicitMode: "balanced",
-  },
-};
-
 const elements = {
   loginBtn: document.getElementById("login"),
   logoutBtn: document.getElementById("logout"),
   track: document.getElementById("track"),
-  recentList: document.getElementById("recent-list"),
-  recentContext: document.getElementById("recent-context"),
+  dayOverview: document.getElementById("day-overview"),
+  dayChapters: document.getElementById("day-chapters"),
+  dayPaneButtons: document.querySelectorAll("[data-day-pane]"),
+  dayPanes: document.querySelectorAll("[data-day-panel]"),
   recList: document.getElementById("rec-list"),
   playlistLinks: document.getElementById("playlist-links"),
   playlistStatus: document.getElementById("playlist-status"),
-  wrappedContext: document.getElementById("wrapped-context"),
   wrappedStatus: document.getElementById("wrapped-status"),
   wrappedShareCard: document.getElementById("wrapped-share-card"),
-  wrappedPersonalityTitle: document.getElementById("wrapped-personality-title"),
-  wrappedPersonalityDetail: document.getElementById("wrapped-personality-detail"),
-  wrappedDiscoveryScore: document.getElementById("wrapped-discovery-score"),
-  wrappedDiscoveryLabel: document.getElementById("wrapped-discovery-label"),
-  wrappedDiscoveryDetail: document.getElementById("wrapped-discovery-detail"),
+  wrappedSection: document.getElementById("wrapped-anytime"),
   wrappedMoodGrid: document.getElementById("wrapped-mood-grid"),
   wrappedTopArtists: document.getElementById("wrapped-top-artists"),
   wrappedTopTracks: document.getElementById("wrapped-top-tracks"),
@@ -370,6 +330,8 @@ const elements = {
   wrappedReplayedTracks: document.getElementById("wrapped-replayed-tracks"),
   wrappedImageShare: document.getElementById("wrapped-image-share"),
   wrappedRangeButtons: document.querySelectorAll(".wrapped-range[data-range]"),
+  wrappedPaneButtons: document.querySelectorAll("[data-wrapped-pane]"),
+  wrappedPanes: document.querySelectorAll("[data-wrapped-panel]"),
   main: document.querySelector("main"),
   topbar: document.querySelector(".topbar"),
   sessionBanner: document.getElementById("session-banner"),
@@ -412,14 +374,17 @@ const elements = {
   visualizerBars: document.querySelectorAll(".hero-visualizer__bar"),
   lyricsTitle: document.getElementById("lyrics-title"),
   lyricsSubtitle: document.getElementById("lyrics-subtitle"),
+  lyricsTiming: document.getElementById("lyrics-timing"),
   lyricsContent: document.getElementById("lyrics-content"),
+  lyricsFollow: document.getElementById("lyrics-follow"),
   lyricsLinks: document.getElementById("lyrics-links"),
   lyricsGenius: document.getElementById("lyrics-genius"),
   lyricsSearch: document.getElementById("lyrics-search"),
   playlistCards: document.querySelectorAll(".playlist-card[data-playlist]"),
+  playlistPaneButtons: document.querySelectorAll("[data-playlist-pane]"),
+  playlistPanes: document.querySelectorAll("[data-playlist-panel]"),
   navLinks: document.querySelectorAll('.topbar nav a[href^="#"]'),
   viewChips: document.querySelectorAll(".now-views .chip"),
-  recContext: document.getElementById("rec-context"),
 };
 
 let lastSync = 0;
@@ -432,10 +397,7 @@ let vinylLastTick = 0;
 let heroPulseTimer = 0;
 let overviewLayoutFrame = 0;
 const imagePreloadCache = new Set();
-
-function normalizeGenreName(genre = "") {
-  return String(genre).toLowerCase().trim();
-}
+const dayPaletteCache = new Map();
 
 function clamp(value, min = 0, max = 1) {
   return Math.min(max, Math.max(min, value));
@@ -559,21 +521,21 @@ function relativeLuminance(color) {
 function createArtworkPalette(primary, secondary, accent) {
   const primaryTone = normalizeColorTone(primary, {
     minLightness: 0.18,
-    maxLightness: 0.56,
-    minSaturation: 0.16,
-    maxSaturation: 0.72,
+    maxLightness: 0.6,
+    minSaturation: 0.4,
+    maxSaturation: 0.92,
   });
   const secondaryTone = normalizeColorTone(secondary, {
     minLightness: 0.24,
     maxLightness: 0.68,
-    minSaturation: 0.14,
-    maxSaturation: 0.74,
+    minSaturation: 0.34,
+    maxSaturation: 0.9,
   });
   const accentTone = normalizeColorTone(accent, {
     minLightness: 0.44,
     maxLightness: 0.76,
-    minSaturation: 0.42,
-    maxSaturation: 0.9,
+    minSaturation: 0.58,
+    maxSaturation: 0.96,
   });
 
   const primaryHsl = rgbToHsl(primaryTone);
@@ -581,18 +543,18 @@ function createArtworkPalette(primary, secondary, accent) {
   const accentHsl = rgbToHsl(accentTone);
   const bgBase = hslToRgb({
     h: primaryHsl.h,
-    s: clamp(primaryHsl.s * 0.56, 0.16, 0.38),
-    l: 0.11,
+    s: clamp(primaryHsl.s * 0.9, 0.22, 0.58),
+    l: 0.095,
   });
   const bgDepth = hslToRgb({
     h: primaryHsl.h,
-    s: clamp(primaryHsl.s * 0.42, 0.12, 0.3),
-    l: 0.055,
+    s: clamp(primaryHsl.s * 0.64, 0.16, 0.42),
+    l: 0.045,
   });
   const gradientLift = hslToRgb({
     h: secondaryHsl.h,
-    s: clamp(secondaryHsl.s * 0.7, 0.16, 0.48),
-    l: 0.22,
+    s: clamp(secondaryHsl.s, 0.38, 0.82),
+    l: 0.28,
   });
   const accentStrong = hslToRgb({
     h: accentHsl.h,
@@ -632,6 +594,9 @@ function createArtworkPalette(primary, secondary, accent) {
     blob2: rgbaString(secondaryTone, 0.34),
     blob3: rgbaString(accentTone, 0.28),
     blob4: rgbaString(tertiary, 0.2),
+    dominant: rgbToCss(primaryTone),
+    secondary: rgbToCss(secondaryTone),
+    highlight: rgbToCss(accentStrong),
     heroWash: `linear-gradient(180deg, ${rgbaString(bgDepth, 0.22)}, ${rgbaString(bgDepth, 0.82)})`,
     heroGlow: rgbaString(mixColors(accentTone, accentStrong, 0.35), 0.18),
     youtubeBg: rgbToCss(warmAction),
@@ -775,11 +740,6 @@ function buildArtworkPalette(imageUrl) {
   });
 }
 
-function fmt(ms) {
-  const seconds = Math.floor((ms || 0) / 1000);
-  return `${Math.floor(seconds / 60)}:${(seconds % 60).toString().padStart(2, "0")}`;
-}
-
 function escapeHtml(value = "") {
   return String(value).replace(/[&<>"']/g, (char) => {
     const map = {
@@ -791,15 +751,6 @@ function escapeHtml(value = "") {
     };
     return map[char] || char;
   });
-}
-
-function getTrackKey(track = null) {
-  if (!track) return "";
-  return track.id || `${track.name || "unknown"}::${(track.artists || []).map((artist) => artist.name).join(",")}`;
-}
-
-function getArtistLabel(track = null) {
-  return (track?.artists || []).map((artist) => artist.name).join(", ") || "Unknown artist";
 }
 
 function formatClockLabel(value) {
@@ -832,60 +783,57 @@ function getTodayBounds(reference = new Date()) {
   return { start, end };
 }
 
-function getListeningChapter(value) {
-  const date = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return {
-      id: "late-night",
-      label: "Late Night",
-      note: "Moodier picks and longer loops start showing up here.",
-    };
-  }
+const DAY_CHAPTER_DEFINITIONS = [
+  {
+    id: "morning-glow",
+    label: "Morning Glow",
+    fixedRange: "5 AM – 11:59 AM",
+    includes: (minute) => minute >= 5 * 60 && minute < 12 * 60,
+  },
+  {
+    id: "midday-motion",
+    label: "Midday Motion",
+    fixedRange: "12 PM – 3:59 PM",
+    includes: (minute) => minute >= 12 * 60 && minute < 16 * 60,
+  },
+  {
+    id: "golden-hour",
+    label: "Golden Hour",
+    fixedRange: "4 PM – 7:59 PM",
+    includes: (minute) => minute >= 16 * 60 && minute < 20 * 60,
+  },
+  {
+    id: "after-hours",
+    label: "After Hours",
+    fixedRange: "8 PM – 4:59 AM",
+    includes: (minute) => minute < 5 * 60 || minute >= 20 * 60,
+  },
+];
 
-  const hour = date.getHours();
-  if (hour < 5) {
-    return {
-      id: "after-midnight",
-      label: "After Midnight",
-      note: "The quieter tracks and slower loops hold the room here.",
-    };
-  }
-  if (hour < 12) {
-    return {
-      id: "morning-glow",
-      label: "Morning Glow",
-      note: "A softer start with brighter colors and steadier choices.",
-    };
-  }
-  if (hour < 17) {
-    return {
-      id: "afternoon-drift",
-      label: "Afternoon Drift",
-      note: "The day settles into a focused rhythm in this stretch.",
-    };
-  }
-  if (hour < 21) {
-    return {
-      id: "evening-lift",
-      label: "Evening Lift",
-      note: "The palette warms up and the energy opens a little wider.",
-    };
-  }
-  return {
-    id: "late-night",
-    label: "Late Night",
-    note: "Moodier picks and longer loops start showing up here.",
-  };
+const DAY_SESSION_GAP_MINUTES = 35;
+const DAY_SESSION_GAP_MS = DAY_SESSION_GAP_MINUTES * 60 * 1000;
+
+function getDayMinute(value) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return 0;
+  return date.getHours() * 60 + date.getMinutes() + date.getSeconds() / 60;
 }
 
-function buildListeningTimeline(items = []) {
-  const { start, end } = getTodayBounds();
+function getListeningChapter(value) {
+  const minute = getDayMinute(value);
+  return DAY_CHAPTER_DEFINITIONS.find((chapter) => chapter.includes(minute)) || DAY_CHAPTER_DEFINITIONS[3];
+}
+
+function buildListeningTimeline(items = [], reference = new Date()) {
+  const { start, end } = getTodayBounds(reference);
+  const currentTime = reference instanceof Date ? reference : new Date(reference);
+  const currentLimit = Number.isNaN(currentTime.getTime()) ? end : currentTime;
   const plays = items
     .map((item) => {
       const track = item?.track;
       const playedAt = item?.played_at ? new Date(item.played_at) : null;
       if (!track || !playedAt || Number.isNaN(playedAt.getTime())) return null;
-      if (playedAt < start || playedAt >= end) return null;
+      if (playedAt < start || playedAt >= end || playedAt > currentLimit) return null;
       return {
         track,
         playedAt,
@@ -895,33 +843,34 @@ function buildListeningTimeline(items = []) {
     .filter(Boolean)
     .sort((a, b) => a.playedAt - b.playedAt);
 
-  const chapters = [];
-  const chapterMap = new Map();
+  const chapters = DAY_CHAPTER_DEFINITIONS.map((definition) => ({
+    ...definition,
+    firstPlayedAt: null,
+    lastPlayedAt: null,
+    plays: [],
+  }));
+  const chapterMap = new Map(chapters.map((chapter) => [chapter.id, chapter]));
   plays.forEach((play) => {
     const chapterMeta = getListeningChapter(play.playedAt);
-    let chapter = chapterMap.get(chapterMeta.id);
-    if (!chapter) {
-      chapter = {
-        ...chapterMeta,
-        firstPlayedAt: play.playedAt,
-        lastPlayedAt: play.playedAt,
-        plays: [],
-      };
-      chapterMap.set(chapterMeta.id, chapter);
-      chapters.push(chapter);
-    }
-    if (play.playedAt < chapter.firstPlayedAt) chapter.firstPlayedAt = play.playedAt;
-    if (play.playedAt > chapter.lastPlayedAt) chapter.lastPlayedAt = play.playedAt;
+    const chapter = chapterMap.get(chapterMeta.id);
+    if (!chapter) return;
+    if (!chapter.firstPlayedAt || play.playedAt < chapter.firstPlayedAt) chapter.firstPlayedAt = play.playedAt;
+    if (!chapter.lastPlayedAt || play.playedAt > chapter.lastPlayedAt) chapter.lastPlayedAt = play.playedAt;
     chapter.plays.push(play);
   });
 
   chapters.forEach((chapter) => {
-    chapter.rangeLabel = formatTimeRange(chapter.firstPlayedAt, chapter.lastPlayedAt);
+    chapter.rangeLabel = chapter.plays.length
+      ? formatTimeRange(chapter.firstPlayedAt, chapter.lastPlayedAt)
+      : "No listening yet.";
   });
 
   return {
     chapters,
     totalPlays: plays.length,
+    plays,
+    currentTime,
+    endMinute: Math.max(1, getDayMinute(currentTime)),
   };
 }
 
@@ -989,23 +938,320 @@ function syncHeroArc() {
   renderHeroArc(describeSongArc(state.previousTrackSnapshot, currentSnapshot));
 }
 
-function createHistoryPlayCard(play) {
-  const card = createCard({
-    track: play.track,
-    detail: `Played ${formatClockLabel(play.playedAt)}`,
-    href: play.track?.external_urls?.spotify || "",
-    onPlay: playTrack,
-  });
-  return card;
+function resolveDayPalette(imageUrl, fallback) {
+  if (!imageUrl) return Promise.resolve(fallback);
+  if (!dayPaletteCache.has(imageUrl)) {
+    dayPaletteCache.set(
+      imageUrl,
+      buildArtworkPalette(imageUrl)
+        .then((palette) => palette.dominant || palette.accent || fallback)
+        .catch(() => fallback)
+    );
+  }
+  return dayPaletteCache.get(imageUrl);
 }
 
-function createHistoryChapterRow(plays = []) {
-  const row = document.createElement("div");
-  row.className = "history-row";
+function formatDayAxisTime(minute) {
+  const date = new Date();
+  date.setHours(0, Math.max(0, Math.floor(minute)), 0, 0);
+  return date.toLocaleTimeString([], { hour: "numeric" });
+}
+
+function buildDayAxis(endMinute) {
+  const step = endMinute <= 6 * 60 ? 2 * 60 : endMinute <= 12 * 60 ? 3 * 60 : 6 * 60;
+  const labels = [{ minute: 0, label: formatDayAxisTime(0) }];
+  for (let minute = step; minute < endMinute - Math.max(30, step * 0.3); minute += step) {
+    labels.push({ minute, label: formatDayAxisTime(minute) });
+  }
+  labels.push({ minute: endMinute, label: "Now", now: true });
+  return labels;
+}
+
+function buildListeningSessions(plays = [], currentTime = new Date()) {
+  const currentMs = currentTime.getTime();
+  const sessions = [];
   plays.forEach((play) => {
-    row.appendChild(createHistoryPlayCard(play));
+    const startMs = play.playedAt.getTime();
+    const rawDuration = Number(play.track?.duration_ms) || 210000;
+    const duration = Math.min(20 * 60 * 1000, Math.max(60 * 1000, rawDuration));
+    const endMs = Math.min(currentMs, Math.max(startMs + 30000, startMs + duration));
+    const segment = { ...play, startMs, endMs };
+    const session = sessions.at(-1);
+    if (!session || startMs - session.lastPlayStartMs > DAY_SESSION_GAP_MS) {
+      sessions.push({ startMs, endMs, lastPlayStartMs: startMs, plays: [segment] });
+      return;
+    }
+    session.endMs = Math.max(session.endMs, endMs);
+    session.lastPlayStartMs = startMs;
+    session.plays.push(segment);
   });
-  return row;
+  return sessions;
+}
+
+function buildSessionGradient(colors = []) {
+  if (!colors.length) return "#6f695f";
+  if (colors.length === 1) return colors[0];
+  const stops = colors.map((color, index) => {
+    const position = colors.length === 1 ? 0 : (index / (colors.length - 1)) * 100;
+    return `${color} ${position.toFixed(1)}%`;
+  });
+  return `linear-gradient(90deg, ${stops.join(", ")})`;
+}
+
+function createDayRibbon(timeline) {
+  const fallbackColors = ["#ff6a2a", "#28b8d8", "#7868e6", "#f04f78", "#e3bc36", "#35a66f"];
+  const ribbon = document.createElement("div");
+  const axis = buildDayAxis(timeline.endMinute);
+  const sessions = buildListeningSessions(timeline.plays, timeline.currentTime);
+  const dayStart = new Date(timeline.currentTime);
+  dayStart.setHours(0, 0, 0, 0);
+  const axisMarkup = axis.map((item, index) => {
+    const position = clamp(item.minute / timeline.endMinute, 0, 1) * 100;
+    const edge = index === 0 ? " is-start" : item.now ? " is-now" : "";
+    return `<span class="day-ribbon__tick${edge}" style="--tick-position:${position.toFixed(3)}%">${escapeHtml(item.label)}</span>`;
+  }).join("");
+  ribbon.className = "day-ribbon";
+  ribbon.innerHTML = `
+    <div class="day-ribbon__axis" aria-hidden="true">${axisMarkup}</div>
+    <div class="day-ribbon__rail" aria-label="Listening sessions from midnight to now">
+      <div class="day-ribbon__sessions"></div>
+    </div>
+  `;
+  const sessionLayer = ribbon.querySelector(".day-ribbon__sessions");
+  sessions.forEach((session, sessionIndex) => {
+    const sessionStartMinute = (session.startMs - dayStart.getTime()) / 60000;
+    const sessionEndMinute = (session.endMs - dayStart.getTime()) / 60000;
+    const sessionDuration = Math.max(0.5, sessionEndMinute - sessionStartMinute);
+    const sessionElement = document.createElement("button");
+    const palettePlays = getRepresentativePlays(session.plays);
+    const sessionColors = palettePlays.map((_, playIndex) => fallbackColors[(sessionIndex + playIndex) % fallbackColors.length]);
+    const representativePlay = session.plays.at(-1);
+    sessionElement.type = "button";
+    sessionElement.className = "day-ribbon__session";
+    sessionElement.style.left = `${(clamp(sessionStartMinute / timeline.endMinute, 0, 1) * 100).toFixed(3)}%`;
+    sessionElement.style.width = `${(clamp(sessionDuration / timeline.endMinute, 0, 1) * 100).toFixed(3)}%`;
+    sessionElement.setAttribute(
+      "aria-label",
+      `${formatCountLabel(session.plays.length, "play")} from ${formatClockLabel(session.startMs)} to ${formatClockLabel(session.endMs)}`
+    );
+    sessionElement.style.background = buildSessionGradient(sessionColors);
+    sessionElement.addEventListener("click", () => playTrack(representativePlay.track, sessionElement));
+    palettePlays.forEach((play, playIndex) => {
+      const imageUrl = play.track?.album?.images?.[0]?.url || "";
+      resolveDayPalette(imageUrl, sessionColors[playIndex]).then((color) => {
+        sessionColors[playIndex] = color;
+        sessionElement.style.background = buildSessionGradient(sessionColors);
+      });
+    });
+    sessionLayer.appendChild(sessionElement);
+  });
+  return ribbon;
+}
+
+function getFeaturedChapterNote(chapter) {
+  const counts = new Map();
+  chapter.plays.forEach((play) => counts.set(play.trackKey, (counts.get(play.trackKey) || 0) + 1));
+  const mostRepeated = [...counts.entries()].sort((left, right) => right[1] - left[1])[0];
+  const repeatedPlay = chapter.plays.find((play) => play.trackKey === mostRepeated?.[0]);
+  if (mostRepeated?.[1] > 1 && repeatedPlay) {
+    return `You returned to ${repeatedPlay.track.name} ${mostRepeated[1]} times across this chapter.`;
+  }
+  const artistCount = new Set(chapter.plays.map((play) => getArtistLabel(play.track))).size;
+  if (chapter.plays.length === 1) {
+    return `${chapter.plays[0].track.name} is the single color held here so far.`;
+  }
+  return `${formatCountLabel(chapter.plays.length, "play")} across ${formatCountLabel(artistCount, "artist")} shaped this part of the day.`;
+}
+
+function getRepresentativePlays(plays = [], limit = 3) {
+  const unique = [];
+  const seen = new Set();
+  plays.forEach((play) => {
+    const imageUrl = play.track?.album?.images?.[0]?.url || play.trackKey;
+    if (!seen.has(imageUrl)) {
+      seen.add(imageUrl);
+      unique.push(play);
+    }
+  });
+  const source = unique.length >= Math.min(limit, plays.length) ? unique : plays;
+  if (source.length <= limit) return source;
+  return [source[0], source[Math.floor((source.length - 1) / 2)], source.at(-1)];
+}
+
+function createFeaturedChapter(timeline) {
+  const populated = timeline.chapters.filter((chapter) => chapter.plays.length);
+  if (!populated.length) return null;
+  const chapter = [...populated].sort((left, right) => {
+    if (right.plays.length !== left.plays.length) return right.plays.length - left.plays.length;
+    return right.lastPlayedAt - left.lastPlayedAt;
+  })[0];
+  const feature = document.createElement("article");
+  const coverPlays = getRepresentativePlays(chapter.plays);
+  feature.className = "day-feature";
+  feature.innerHTML = `
+    <div class="day-feature__copy">
+      <p>Featured Chapter</p>
+      <h3>${escapeHtml(chapter.label)}</h3>
+      <strong>${escapeHtml(chapter.rangeLabel)}</strong>
+      <span>${escapeHtml(getFeaturedChapterNote(chapter))}</span>
+    </div>
+    <div class="day-feature__covers" aria-label="Representative records from ${escapeHtml(chapter.label)}"></div>
+  `;
+  const covers = feature.querySelector(".day-feature__covers");
+  coverPlays.forEach((play, index) => {
+    const cover = document.createElement("button");
+    const imageUrl = play.track?.album?.images?.[0]?.url || "";
+    cover.type = "button";
+    cover.className = "day-feature__cover";
+    cover.setAttribute("aria-label", `Play ${play.track.name} by ${getArtistLabel(play.track)}`);
+    cover.innerHTML = imageUrl
+      ? `<img src="${escapeHtml(imageUrl)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">`
+      : '<span aria-hidden="true"></span>';
+    cover.addEventListener("click", () => playTrack(play.track, cover));
+    covers.appendChild(cover);
+    resolveDayPalette(imageUrl, ["#ff6a2a", "#28b8d8", "#7868e6"][index % 3]).then((color) => {
+      feature.style.setProperty(`--feature-color-${index + 1}`, color);
+    });
+  });
+  return feature;
+}
+
+function createDayHighlight({ label, play = null, title = "", detail = "", count = 0 }) {
+  const element = document.createElement(play ? "button" : "article");
+  const imageUrl = play?.track?.album?.images?.[0]?.url || "";
+  if (play) element.type = "button";
+  element.className = "day-highlight";
+  element.innerHTML = `
+    <span class="day-highlight__label">${escapeHtml(label)}</span>
+    <span class="day-highlight__body">
+      ${imageUrl
+        ? `<img src="${escapeHtml(imageUrl)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">`
+        : '<span class="day-highlight__swatch" aria-hidden="true"></span>'}
+      <span class="day-highlight__copy">
+        <strong>${escapeHtml(play?.track?.name || title)}</strong>
+        <span>${escapeHtml(play ? getArtistLabel(play.track) : detail)}</span>
+        ${count > 1 ? `<em>${escapeHtml(`${count} plays`)}</em>` : ""}
+      </span>
+    </span>
+  `;
+  if (play) element.addEventListener("click", () => playTrack(play.track, element));
+  return element;
+}
+
+function createDayOverview(timeline) {
+  const overview = document.createElement("div");
+  overview.className = "day-overview";
+  if (!timeline.plays.length) {
+    const quiet = document.createElement("div");
+    quiet.className = "day-overview__quiet";
+    quiet.innerHTML = `
+      <p>Today is still quiet.</p>
+      <strong>Your first listen will leave the first passage of color here.</strong>
+    `;
+    overview.appendChild(quiet);
+    return overview;
+  }
+  overview.appendChild(createDayRibbon(timeline));
+  const story = document.createElement("div");
+  story.className = "day-overview__story";
+  const feature = createFeaturedChapter(timeline);
+  if (feature) story.appendChild(feature);
+  const highlights = document.createElement("div");
+  highlights.className = "day-highlights";
+  const firstPlay = timeline.plays[0];
+  const latestPlay = timeline.plays.at(-1);
+  const counts = new Map();
+  timeline.plays.forEach((play) => {
+    const entry = counts.get(play.trackKey) || { count: 0, play };
+    entry.count += 1;
+    counts.set(play.trackKey, entry);
+  });
+  const mostPlayed = [...counts.values()].sort((left, right) => right.count - left.count)[0];
+  highlights.appendChild(createDayHighlight({ label: "First Track", play: firstPlay }));
+  highlights.appendChild(createDayHighlight({ label: "Most Played", play: mostPlayed.play, count: mostPlayed.count }));
+  highlights.appendChild(createDayHighlight({ label: "Latest", play: latestPlay }));
+  story.appendChild(highlights);
+  overview.appendChild(story);
+  return overview;
+}
+
+function createDayMoment(play, colorIndex = 0) {
+  const moment = document.createElement("button");
+  const imageUrl = play.track?.album?.images?.[0]?.url || "";
+  moment.type = "button";
+  moment.className = "day-moment";
+  moment.style.setProperty("--moment-color", ["#ff6a2a", "#28b8d8", "#7868e6", "#e3bc36"][colorIndex % 4]);
+  moment.setAttribute(
+    "aria-label",
+    `Play ${play.track?.name || "track"} by ${getArtistLabel(play.track)}, heard ${formatClockLabel(play.playedAt)}`
+  );
+  moment.innerHTML = `
+    <span class="day-moment__time">${escapeHtml(formatClockLabel(play.playedAt))}</span>
+    <span class="day-moment__art">
+      ${imageUrl ? `<img src="${escapeHtml(imageUrl)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">` : '<span aria-hidden="true"></span>'}
+    </span>
+    <span class="day-moment__copy">
+      <strong>${escapeHtml(play.track?.name || "Unknown track")}</strong>
+      <span>${escapeHtml(getArtistLabel(play.track))}</span>
+    </span>
+  `;
+  moment.addEventListener("click", () => playTrack(play.track, moment));
+  resolveDayPalette(imageUrl, moment.style.getPropertyValue("--moment-color")).then((color) => {
+    moment.style.setProperty("--moment-color", color);
+  });
+  return moment;
+}
+
+function getDayChapterTemporalState(chapter, minute) {
+  if (chapter.includes(minute)) return "current";
+  if (chapter.id === "morning-glow") return minute < 5 * 60 ? "future" : "complete";
+  if (chapter.id === "midday-motion") return minute < 12 * 60 ? "future" : "complete";
+  if (chapter.id === "golden-hour") return minute < 16 * 60 ? "future" : "complete";
+  return minute >= 5 * 60 && minute < 20 * 60 ? "future" : "complete";
+}
+
+function createListeningChapter(chapter, options = {}) {
+  const section = document.createElement("section");
+  const tracksId = `day-chapter-tracks-${chapter.id}`;
+  const hasListening = chapter.plays.length > 0;
+  const temporalState = getDayChapterTemporalState(chapter, getDayMinute(options.currentTime));
+  const isFuture = !hasListening && temporalState === "future";
+  const isCurrent = !hasListening && temporalState === "current";
+  const visibleCount = options.visibleCount || 3;
+  section.className = `day-chapter ${hasListening ? "day-chapter--populated" : "day-chapter--preview"} is-${hasListening ? "populated" : temporalState}`;
+  section.innerHTML = `
+    <header class="day-chapter__header">
+      <p>${escapeHtml(hasListening ? formatCountLabel(chapter.plays.length, "play") : chapter.fixedRange)}</p>
+      <h3>${escapeHtml(chapter.label)}</h3>
+      <strong>${escapeHtml(hasListening ? chapter.rangeLabel : isFuture ? "Later today" : isCurrent ? "No listening yet" : "No listening this chapter")}</strong>
+    </header>
+    ${hasListening ? `<div id="${tracksId}" class="day-chapter__tracks"></div>` : ""}
+  `;
+  const tracks = section.querySelector(".day-chapter__tracks");
+  if (!tracks) return section;
+  const moments = chapter.plays.map((play, index) => createDayMoment(play, index));
+  moments.forEach((moment, index) => {
+    moment.hidden = index >= visibleCount;
+    tracks.appendChild(moment);
+  });
+  section.style.setProperty("--chapter-visible-count", visibleCount);
+  if (chapter.plays.length > visibleCount) {
+    const hiddenCount = chapter.plays.length - visibleCount;
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "day-chapter__toggle";
+    toggle.setAttribute("aria-controls", tracksId);
+    toggle.setAttribute("aria-expanded", "false");
+    toggle.textContent = `+ ${hiddenCount} more`;
+    toggle.addEventListener("click", () => {
+      const expanded = section.classList.toggle("is-expanded");
+      moments.forEach((moment, index) => { moment.hidden = !expanded && index >= visibleCount; });
+      toggle.setAttribute("aria-expanded", String(expanded));
+      toggle.textContent = expanded ? "Close" : `+ ${hiddenCount} more`;
+    });
+    section.appendChild(toggle);
+  }
+  return section;
 }
 
 function inferAudioProfile(genre = "", tags = []) {
@@ -1065,6 +1311,14 @@ function setReactiveProfile(audioProfile = null) {
 function clearReactiveProfile() {
   state.currentAudioProfile = null;
   setReactiveProfile(null);
+}
+
+function syncPersistentLayout() {
+  const root = document.documentElement;
+  const bannerHeight = elements.sessionBanner?.classList.contains("hidden")
+    ? 0
+    : Math.round(elements.sessionBanner?.getBoundingClientRect().height || 0);
+  root.style.setProperty("--banner-height", `${bannerHeight}px`);
 }
 
 function showSection(id) {
@@ -1141,6 +1395,10 @@ function applyThemeVariables(palette) {
     "--hero-glow": palette.heroGlow || DEFAULT_THEME.heroGlow || "rgba(159, 215, 202, 0.18)",
     "--youtube-bg": palette.youtubeBg,
     "--youtube-bg-hover": palette.youtubeBgHover,
+    "--color-dominant": palette.dominant || palette.accent,
+    "--color-secondary": palette.secondary || palette.accentStrong,
+    "--color-highlight": palette.highlight || palette.text,
+    "--surface-tint": palette.accentSoft,
   };
 
   Object.entries(cssVars).forEach(([name, value]) => {
@@ -1299,6 +1557,15 @@ function setNowView(view = "card") {
   if (elements.nowCard) elements.nowCard.classList.toggle("hidden", nextView !== "card");
   if (elements.nowVinyl) elements.nowVinyl.classList.toggle("hidden", nextView !== "vinyl");
   if (elements.nowLyrics) elements.nowLyrics.classList.toggle("hidden", nextView !== "lyrics");
+  if (nextView === "lyrics") {
+    window.requestAnimationFrame(() => syncLyricsPlayback(getCurrentProgressMs(), { forceFollow: true }));
+  }
+}
+
+function getCurrentProgressMs(now = Date.now()) {
+  if (durationMs <= 0) return 0;
+  const elapsed = isPlaying ? Math.max(0, now - lastSync) : 0;
+  return clamp(progressMs + elapsed, 0, durationMs);
 }
 
 function setSpotifyLink(url) {
@@ -1345,7 +1612,7 @@ function syncVinylMotion({ reset = false } = {}) {
     vinylRotation = 0;
     paintVinylRotation();
   }
-  if (elements.vinyl && state.currentItem && isPlaying) {
+  if (elements.vinyl && state.currentItem && isPlaying && !state.preferences.reducedMotion) {
     if (!vinylFrame) {
       vinylLastTick = 0;
       vinylFrame = window.requestAnimationFrame(stepVinylMotion);
@@ -1436,6 +1703,7 @@ function setHeroMeta({ item = null, context = "" } = {}) {
   if (!elements.heroTitle || !elements.heroArtist || !elements.heroContext) return;
 
   if (!item) {
+    elements.heroTitle.classList.remove("hero-title--medium", "hero-title--long");
     elements.heroTitle.textContent = "Connect Spotify";
     elements.heroArtist.textContent = "Log in and start a track to make the page react to your music.";
     elements.heroContext.textContent = context || "Album art, motion, and lyrics respond to what's playing.";
@@ -1446,7 +1714,10 @@ function setHeroMeta({ item = null, context = "" } = {}) {
     return;
   }
 
-  elements.heroTitle.textContent = item.name || "Unknown track";
+  const title = item.name || "Unknown track";
+  elements.heroTitle.textContent = title;
+  elements.heroTitle.classList.toggle("hero-title--medium", title.length > 42 && title.length <= 70);
+  elements.heroTitle.classList.toggle("hero-title--long", title.length > 70);
   elements.heroArtist.textContent = (item.artists || []).map((artist) => artist.name).join(", ") || "Unknown artist";
   elements.heroContext.textContent = "";
   elements.heroContext.classList.add("hidden");
@@ -1459,12 +1730,7 @@ function renderSkeletonCards(container, count = 6) {
   if (!container) return;
   container.innerHTML = "";
   const row = document.createElement("div");
-  row.className =
-    container === elements.recentList
-      ? "history-row"
-      : container === elements.recList
-        ? "recommendation-row"
-        : "card-row";
+  row.className = container === elements.recList ? "recommendation-row" : "card-row";
   for (let index = 0; index < count; index += 1) {
     const skeleton = document.createElement("article");
     skeleton.className = "card skeleton-card";
@@ -1680,6 +1946,7 @@ function showBanner(message, actionLabel = "", actionHref = "/login") {
   if (!elements.sessionBanner || !elements.sessionMessage || !elements.sessionLink) return;
   if (!message) {
     elements.sessionBanner.classList.add("hidden");
+    window.requestAnimationFrame(syncPersistentLayout);
     queueOverviewLayoutSync();
     return;
   }
@@ -1688,6 +1955,7 @@ function showBanner(message, actionLabel = "", actionHref = "/login") {
   elements.sessionLink.href = actionHref;
   elements.sessionLink.classList.toggle("hidden", !actionLabel);
   elements.sessionBanner.classList.remove("hidden");
+  window.requestAnimationFrame(syncPersistentLayout);
   queueOverviewLayoutSync();
 }
 
@@ -1699,8 +1967,8 @@ function syncAuthButtons() {
 function setPlaylistStatus(message, tone = "muted") {
   if (!elements.playlistStatus) return;
   elements.playlistStatus.textContent = message;
-  elements.playlistStatus.style.color =
-    tone === "error" ? "#f2b8b2" : tone === "success" ? "var(--text-soft)" : "var(--muted)";
+  elements.playlistStatus.classList.toggle("is-error", tone === "error");
+  elements.playlistStatus.classList.toggle("is-success", tone === "success");
 }
 
 function setPlaylistCardsDisabled(disabled) {
@@ -1709,11 +1977,20 @@ function setPlaylistCardsDisabled(disabled) {
   });
 }
 
+function flashPlaylistCardState(button, stateClass, duration = 2200) {
+  if (!button) return;
+  button.classList.remove("is-loading", "is-success", "is-error");
+  button.classList.add(stateClass);
+  if (stateClass !== "is-loading") {
+    window.setTimeout(() => button.classList.remove(stateClass), duration);
+  }
+}
+
 function renderEmptyState(container, title, detail) {
   if (!container) return;
   container.innerHTML = `
     <div class="empty-state">
-      <span class="empty-state__orb" aria-hidden="true"></span>
+      <span class="empty-state__mark" aria-hidden="true">—</span>
       <strong>${escapeHtml(title)}</strong>
       <p>${escapeHtml(detail)}</p>
     </div>
@@ -1795,50 +2072,38 @@ function setLyricsLinks(searchUrls = null) {
   elements.lyricsLinks.classList.toggle("hidden", !geniusUrl && !searchUrl);
 }
 
-function buildLyricLines(content = "") {
-  return String(content)
-    .replace(/\r/g, "")
-    .split("\n")
-    .reduce((lines, line) => {
-      const text = line.trim();
-      if (!text) {
-        if (lines.length && lines[lines.length - 1]?.type !== "spacer") {
-          lines.push({ type: "spacer" });
-        }
-        return lines;
-      }
-      const previous = lines[lines.length - 1];
-      lines.push({
-        type: "line",
-        text,
-        stanzaBreak: !previous || previous.type === "spacer",
-      });
-      return lines;
-    }, []);
+function setLyricsTiming(timing = "plain", source = "") {
+  state.lyricsTiming = timing;
+  if (!elements.lyricsTiming) return;
+  const labels = {
+    synced: "Line synced",
+    estimated: "Estimated timing",
+    plain: "Plain lyrics",
+  };
+  elements.lyricsTiming.textContent = labels[timing] || labels.plain;
+  elements.lyricsTiming.dataset.source = source || "";
+  elements.lyricsTiming.classList.toggle("hidden", !state.currentItem && timing === "plain");
 }
 
-function buildLyricTimeline(lines = [], totalDurationMs = 0) {
-  const lyricLines = lines.filter((line) => line.type === "line");
-  if (!lyricLines.length || totalDurationMs <= 0) return [];
+function setLyricsFollow(enabled) {
+  state.lyricsFollowEnabled = !!enabled;
+  if (enabled) state.lyricsManualUntil = 0;
+  if (elements.lyricsFollow) {
+    elements.lyricsFollow.classList.toggle("hidden", enabled || !state.lyricsInteractive);
+  }
+}
 
-  const weights = lyricLines.map((line) => {
-    const lengthWeight = clamp(line.text.length / 26, 0.8, 2.5);
-    return lengthWeight + (line.stanzaBreak ? 0.28 : 0);
-  });
-  const totalWeight = weights.reduce((sum, weight) => sum + weight, 0) || 1;
-  let cursor = 0;
+function pauseLyricsFollow() {
+  if (!state.lyricsInteractive || state.activeView !== "lyrics") return;
+  state.lyricsFollowEnabled = false;
+  state.lyricsManualUntil = Date.now() + 12_000;
+  elements.lyricsFollow?.classList.remove("hidden");
+}
 
-  return lyricLines.map((line, index) => {
-    const segmentDuration = (weights[index] / totalWeight) * totalDurationMs;
-    const start = cursor;
-    const end = index === lyricLines.length - 1 ? totalDurationMs : cursor + segmentDuration;
-    cursor = end;
-    return {
-      text: line.text,
-      start,
-      end,
-    };
-  });
+function resumeLyricsFollow() {
+  if (!state.lyricsInteractive) return;
+  setLyricsFollow(true);
+  syncLyricsPlayback(getCurrentProgressMs(), { forceFollow: true });
 }
 
 function renderLyricsLoadingState({
@@ -1850,9 +2115,11 @@ function renderLyricsLoadingState({
   state.lyricLineElements = [];
   state.activeLyricLineIndex = -1;
   state.lyricsInteractive = false;
+  setLyricsFollow(true);
 
   if (elements.lyricsTitle) elements.lyricsTitle.textContent = title;
   if (elements.lyricsSubtitle) elements.lyricsSubtitle.textContent = subtitle;
+  if (elements.lyricsTiming) elements.lyricsTiming.classList.add("hidden");
   if (elements.lyricsContent) {
     elements.lyricsContent.classList.remove("lyrics-content--lines");
     elements.lyricsContent.classList.add("lyrics-content--loading");
@@ -1869,27 +2136,37 @@ function renderLyricsLoadingState({
   setLyricsLinks(null);
 }
 
-function syncLyricsPlayback(currentMs = 0) {
+function syncLyricsPlayback(currentMs = 0, { forceFollow = false } = {}) {
   if (
     !elements.lyricsContent ||
     !state.lyricsInteractive ||
     !state.lyricLineElements.length ||
-    !state.lyricTimeline.length ||
-    durationMs <= 0
+    !state.lyricTimeline.length
   ) {
     return;
   }
-  const timelineIndex = state.lyricTimeline.findIndex((segment) => currentMs <= segment.end + 24);
-  const targetIndex = timelineIndex === -1 ? state.lyricTimeline.length - 1 : timelineIndex;
-  if (targetIndex === state.activeLyricLineIndex) return;
 
-  state.activeLyricLineIndex = targetIndex;
-  state.lyricLineElements.forEach((line, index) => {
-    line.classList.toggle("is-active", index === targetIndex);
-    line.classList.toggle("is-past", index < targetIndex);
-  });
+  let targetIndex = -1;
+  for (let index = 0; index < state.lyricTimeline.length; index += 1) {
+    if (state.lyricTimeline[index].start > currentMs + 24) break;
+    targetIndex = index;
+  }
 
-  if (state.activeView !== "lyrics") return;
+  if (targetIndex !== state.activeLyricLineIndex) {
+    state.activeLyricLineIndex = targetIndex;
+    state.lyricLineElements.forEach((line, index) => {
+      const distance = targetIndex < 0 ? index + 1 : Math.abs(index - targetIndex);
+      line.classList.toggle("is-active", index === targetIndex);
+      line.classList.toggle("is-past", targetIndex >= 0 && index < targetIndex);
+      line.classList.toggle("is-far", distance > 2);
+      if (index === targetIndex) line.setAttribute("aria-current", "true");
+      else line.removeAttribute("aria-current");
+    });
+  }
+
+  if (state.activeView !== "lyrics" || targetIndex < 0) return;
+  if (!state.lyricsFollowEnabled && Date.now() >= state.lyricsManualUntil) setLyricsFollow(true);
+  if (!state.lyricsFollowEnabled) return;
   const activeLine = state.lyricLineElements[targetIndex];
   if (!activeLine) return;
   const nextTop = Math.max(
@@ -1897,10 +2174,10 @@ function syncLyricsPlayback(currentMs = 0) {
     activeLine.offsetTop - elements.lyricsContent.clientHeight / 2 + activeLine.offsetHeight / 2
   );
   const distance = Math.abs(nextTop - elements.lyricsContent.scrollTop);
-  if (distance < 12) return;
+  if (!forceFollow && distance < 12) return;
   elements.lyricsContent.scrollTo({
     top: nextTop,
-    behavior: state.preferences.reducedMotion || distance > 220 ? "auto" : "smooth",
+    behavior: state.preferences.reducedMotion || distance > 260 ? "auto" : "smooth",
   });
 }
 
@@ -1910,6 +2187,9 @@ function renderLyricsView({
   content = "Lyrics will appear here when available.",
   searchUrls = null,
   interactive = false,
+  syncedLyrics = "",
+  timing = "plain",
+  source = "",
 } = {}) {
   if (elements.lyricsTitle) elements.lyricsTitle.textContent = title;
   if (elements.lyricsSubtitle) elements.lyricsSubtitle.textContent = subtitle;
@@ -1918,13 +2198,31 @@ function renderLyricsView({
   state.lyricLineElements = [];
   state.activeLyricLineIndex = -1;
   state.lyricsInteractive = false;
+  setLyricsFollow(true);
   if (elements.lyricsContent) {
+    const trackDuration = durationMs || state.currentItem?.duration_ms || 0;
+    const syncedTimeline = interactive ? parseSyncedLyrics(syncedLyrics, trackDuration) : [];
     const lyricLines = buildLyricLines(content);
     elements.lyricsContent.classList.remove("lyrics-content--loading");
     elements.lyricsContent.innerHTML = "";
     elements.lyricsContent.scrollTop = 0;
 
-    if (interactive && lyricLines.filter((line) => line.type === "line").length >= 4) {
+    if (syncedTimeline.length >= 2) {
+      elements.lyricsContent.classList.add("lyrics-content--lines");
+      const fragment = document.createDocumentFragment();
+      syncedTimeline.forEach((line) => {
+        const paragraph = document.createElement("p");
+        paragraph.className = "lyric-line";
+        paragraph.textContent = line.text;
+        state.currentLyricsLines.push(line.text);
+        state.lyricLineElements.push(paragraph);
+        fragment.appendChild(paragraph);
+      });
+      elements.lyricsContent.appendChild(fragment);
+      state.lyricTimeline = syncedTimeline;
+      state.lyricsInteractive = state.lyricTimeline.length === state.lyricLineElements.length;
+      setLyricsTiming("synced", source);
+    } else if (interactive && trackDuration > 0 && lyricLines.filter((line) => line.type === "line").length >= 4) {
       elements.lyricsContent.classList.add("lyrics-content--lines");
       const fragment = document.createDocumentFragment();
       lyricLines.forEach((line) => {
@@ -1942,13 +2240,20 @@ function renderLyricsView({
         fragment.appendChild(paragraph);
       });
       elements.lyricsContent.appendChild(fragment);
-      state.lyricTimeline = buildLyricTimeline(lyricLines, durationMs || state.currentItem?.duration_ms || 0);
+      state.lyricTimeline = buildLyricTimeline(lyricLines, trackDuration);
       state.lyricsInteractive = state.lyricTimeline.length === state.lyricLineElements.length;
+      setLyricsTiming("estimated", source);
     } else {
       elements.lyricsContent.classList.remove("lyrics-content--lines");
       elements.lyricsContent.textContent = content;
+      if (interactive) setLyricsTiming(timing === "synced" ? "plain" : timing, source);
+      else elements.lyricsTiming?.classList.add("hidden");
     }
   }
+  if (elements.lyricsFollow) {
+    elements.lyricsFollow.classList.toggle("hidden", !state.lyricsInteractive);
+  }
+  setLyricsFollow(true);
   setLyricsLinks(searchUrls);
 }
 
@@ -1972,6 +2277,7 @@ function resetProgress() {
 
 function updateTrackCard(item) {
   if (!elements.track) return;
+  document.body.classList.toggle("has-current-track", !!item);
   if (!item) {
     renderTrackPanelEmptyState(
       "Nothing is playing right now.",
@@ -2133,6 +2439,7 @@ function createCard({ track, detail = "", href = "", onPlay = null, badge = "" }
     link.target = "_blank";
     link.rel = "noreferrer";
     link.textContent = "Open";
+    link.setAttribute("aria-label", `Open ${title} by ${subtitle} in Spotify`);
     link.addEventListener("click", (event) => {
       event.stopPropagation();
     });
@@ -2162,70 +2469,86 @@ function createCard({ track, detail = "", href = "", onPlay = null, badge = "" }
 function createTrackRow(tracks = [], options = {}) {
   const row = document.createElement("div");
   row.className = options.rowClass || "card-row";
-  tracks.forEach((track) => {
+  tracks.forEach((track, index) => {
     if (!track) return;
-    row.appendChild(
-      createCard({
-        track,
-        detail: typeof options.detail === "function" ? options.detail(track) : options.detail || "",
-        badge: typeof options.badge === "function" ? options.badge(track) : options.badge || "",
-        href: track.external_urls?.spotify || "",
-        onPlay: playTrack,
-      })
-    );
+    const card = createCard({
+      track,
+      detail: typeof options.detail === "function" ? options.detail(track, index) : options.detail || "",
+      badge: typeof options.badge === "function" ? options.badge(track, index) : options.badge || "",
+      href: track.external_urls?.spotify || "",
+      onPlay: playTrack,
+    });
+    if (typeof options.decorate === "function") options.decorate(card, track, index);
+    row.appendChild(card);
   });
   return row;
 }
 
 function renderFeelingHistory(items = []) {
-  if (!elements.recentList) return;
-  elements.recentList.innerHTML = "";
+  if (!elements.dayOverview || !elements.dayChapters) return;
   const timeline = buildListeningTimeline(items);
+  elements.dayOverview.innerHTML = "";
+  elements.dayChapters.innerHTML = "";
+  elements.dayOverview.appendChild(createDayOverview(timeline));
+  const chapters = document.createElement("div");
+  const populatedChapters = timeline.chapters.filter((chapter) => chapter.plays.length);
+  const previewChapters = timeline.chapters.filter((chapter) => !chapter.plays.length);
+  const visibleCount = populatedChapters.length <= 1 ? 5 : populatedChapters.length === 2 ? 4 : 3;
+  const stories = document.createElement("div");
+  const previews = document.createElement("div");
+  chapters.className = "day-chapters";
+  chapters.dataset.populated = String(populatedChapters.length);
+  stories.className = "day-chapters__stories";
+  previews.className = "day-chapters__previews";
+  populatedChapters.forEach((chapter) => {
+    stories.appendChild(createListeningChapter(chapter, { currentTime: timeline.currentTime, visibleCount }));
+  });
+  previewChapters.forEach((chapter) => {
+    previews.appendChild(createListeningChapter(chapter, { currentTime: timeline.currentTime, visibleCount }));
+  });
+  if (stories.children.length) chapters.appendChild(stories);
+  if (previews.children.length) chapters.appendChild(previews);
+  elements.dayChapters.appendChild(chapters);
+}
 
-  if (!timeline.chapters.length) {
-    renderEmptyState(
-      elements.recentList,
-      "No recent tracks yet.",
-      "Play something on Spotify and it will show up here."
-    );
-    if (elements.recentContext) {
-      elements.recentContext.textContent = "A color memory of what today has sounded like.";
-    }
-    return;
-  }
-
-  if (elements.recentContext) {
-    elements.recentContext.textContent = `A color memory of ${formatCountLabel(
-      timeline.totalPlays,
-      "play"
-    )} from today.`;
-  }
-
-  timeline.chapters.forEach((chapter) => {
-    const section = document.createElement("section");
-    section.className = "history-group history-chapter";
-    section.innerHTML = `
-      <div class="collection-header history-chapter__header">
-        <div>
-          <p class="collection-kicker">${escapeHtml(chapter.rangeLabel || chapter.label)}</p>
-          <h3>${escapeHtml(chapter.label)}</h3>
-          <p class="collection-note">${escapeHtml(chapter.note)}</p>
-        </div>
+function renderDayUnavailable(title, detail) {
+  [elements.dayOverview, elements.dayChapters].forEach((container) => {
+    if (!container) return;
+    container.innerHTML = `
+      <div class="day-message">
+        <strong>${escapeHtml(title)}</strong>
+        <p>${escapeHtml(detail)}</p>
       </div>
     `;
-    section.appendChild(createHistoryChapterRow(chapter.plays));
-    elements.recentList.appendChild(section);
   });
 }
 
-function renderRecommendationGroups(groups = []) {
+function renderDayLoading() {
+  if (elements.dayOverview) {
+    elements.dayOverview.innerHTML = `
+      <div class="day-loading day-loading--overview" aria-label="Loading today's listening">
+        <span></span><span></span><span></span><span></span>
+      </div>
+    `;
+  }
+  if (elements.dayChapters) {
+    elements.dayChapters.innerHTML = `
+      <div class="day-loading day-loading--chapters" aria-hidden="true">
+        <span></span><span></span><span></span><span></span>
+      </div>
+    `;
+  }
+}
+
+function renderRecommendationGroups(groups = [], sourceTrack = "") {
   if (!elements.recList) return;
   elements.recList.innerHTML = "";
   const seen = new Set();
-  const tracks = [];
+  const renderedGroups = [];
 
-  groups.forEach((group) => {
+  groups.forEach((group, sourceIndex) => {
     if (!Array.isArray(group?.tracks)) return;
+    const tracks = [];
     group.tracks.forEach((track) => {
       if (!track) return;
       const trackKey =
@@ -2237,17 +2560,81 @@ function renderRecommendationGroups(groups = []) {
       seen.add(trackKey);
       tracks.push(track);
     });
+    if (!tracks.length) return;
+
+    const section = document.createElement("section");
+    section.className = "recommendation-group";
+    section.dataset.recommendationPanel = String(sourceIndex);
+    section.id = `recommendation-panel-${sourceIndex}`;
+    section.setAttribute("role", "tabpanel");
+    section.setAttribute("aria-labelledby", `recommendation-tab-${sourceIndex}`);
+    section.appendChild(createTrackRow(tracks, {
+      rowClass: "recommendation-row",
+      badge: (track) => track?.spotifeel_reason_short || "close match",
+    }));
+    renderedGroups.push({ group, section, sourceIndex });
   });
 
-  if (!tracks.length) return;
-
-  elements.recList.appendChild(
-    createTrackRow(tracks, {
-      rowClass: "recommendation-row",
-      detail: "",
-      badge: (track) => track?.spotifeel_reason_short || "",
-    })
+  if (!renderedGroups.length) return;
+  state.activeRecommendationGroup = Math.min(
+    Math.max(0, state.activeRecommendationGroup || 0),
+    renderedGroups.length - 1
   );
+
+  const tabs = document.createElement("div");
+  tabs.className = "section-tabs recommendation-tabs";
+  tabs.setAttribute("role", "tablist");
+  tabs.setAttribute("aria-label", "Recommendation groups");
+
+  const groupHeading = document.createElement("div");
+  groupHeading.className = "recommendation-group-heading";
+  groupHeading.innerHTML = `
+    <p class="collection-kicker">Because you listened to ${escapeHtml(sourceTrack || "this track")}</p>
+    <h3 aria-live="polite"></h3>
+  `;
+
+  const activate = (nextIndex, { focus = false } = {}) => {
+    const previousScrollY = window.scrollY || document.documentElement.scrollTop || 0;
+    state.activeRecommendationGroup = nextIndex;
+    groupHeading.querySelector("h3").textContent = renderedGroups[nextIndex]?.group?.title || "Listening path";
+    renderedGroups.forEach(({ section }, index) => {
+      const active = index === nextIndex;
+      section.classList.toggle("is-active", active);
+      section.hidden = !active;
+    });
+    [...tabs.querySelectorAll("[data-recommendation-tab]")].forEach((button, index) => {
+      const active = index === nextIndex;
+      button.classList.toggle("is-active", active);
+      button.setAttribute("aria-selected", String(active));
+      button.tabIndex = active ? 0 : -1;
+      if (active && focus) button.focus({ preventScroll: true });
+    });
+    window.requestAnimationFrame(() => jumpWindowScroll(previousScrollY));
+  };
+
+  renderedGroups.forEach(({ group, sourceIndex }, index) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "section-tab";
+    button.dataset.recommendationTab = String(index);
+    button.id = `recommendation-tab-${sourceIndex}`;
+    button.setAttribute("role", "tab");
+    button.setAttribute("aria-controls", `recommendation-panel-${sourceIndex}`);
+    button.textContent = group.title || `Selection ${index + 1}`;
+    button.addEventListener("click", () => activate(index));
+    button.addEventListener("keydown", (event) => {
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      event.preventDefault();
+      const direction = event.key === "ArrowRight" ? 1 : -1;
+      activate((index + direction + renderedGroups.length) % renderedGroups.length, { focus: true });
+    });
+    tabs.appendChild(button);
+  });
+
+  elements.recList.appendChild(tabs);
+  elements.recList.appendChild(groupHeading);
+  renderedGroups.forEach(({ section }) => elements.recList.appendChild(section));
+  activate(state.activeRecommendationGroup);
 }
 
 function setWrappedStatus(message = "", tone = "muted") {
@@ -2265,6 +2652,67 @@ function syncWrappedRangeButtons() {
   });
 }
 
+function activateStaticPane({ buttons, panes, value, buttonAttribute, panelAttribute, stateKey, focus = false }) {
+  state[stateKey] = value;
+  buttons.forEach((button) => {
+    const active = button.dataset[buttonAttribute] === value;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-selected", String(active));
+    button.tabIndex = active ? 0 : -1;
+    if (active && focus) button.focus();
+  });
+  panes.forEach((pane) => {
+    const active = pane.dataset[panelAttribute] === value;
+    pane.classList.toggle("is-active", active);
+    pane.hidden = !active;
+  });
+}
+
+function setWrappedPane(value = "overview", options = {}) {
+  const nextValue = ["overview", "artists", "songs", "genres"].includes(value) ? value : "overview";
+  const previousScrollY = window.scrollY || document.documentElement.scrollTop || 0;
+  activateStaticPane({
+    buttons: elements.wrappedPaneButtons,
+    panes: elements.wrappedPanes,
+    value: nextValue,
+    buttonAttribute: "wrappedPane",
+    panelAttribute: "wrappedPanel",
+    stateKey: "activeWrappedPane",
+    ...options,
+  });
+  window.requestAnimationFrame(() => jumpWindowScroll(previousScrollY));
+}
+
+function setDayPane(value = "overview", options = {}) {
+  const nextValue = ["overview", "chapters"].includes(value) ? value : "overview";
+  const previousScrollY = window.scrollY || document.documentElement.scrollTop || 0;
+  activateStaticPane({
+    buttons: elements.dayPaneButtons,
+    panes: elements.dayPanes,
+    value: nextValue,
+    buttonAttribute: "dayPane",
+    panelAttribute: "dayPanel",
+    stateKey: "activeDayPane",
+    ...options,
+  });
+  window.requestAnimationFrame(() => jumpWindowScroll(previousScrollY));
+}
+
+function setPlaylistPane(value = "genre", options = {}) {
+  const nextValue = ["genre", "decade", "mood"].includes(value) ? value : "genre";
+  const previousScrollY = window.scrollY || document.documentElement.scrollTop || 0;
+  activateStaticPane({
+    buttons: elements.playlistPaneButtons,
+    panes: elements.playlistPanes,
+    value: nextValue,
+    buttonAttribute: "playlistPane",
+    panelAttribute: "playlistPanel",
+    stateKey: "activePlaylistPane",
+    ...options,
+  });
+  window.requestAnimationFrame(() => jumpWindowScroll(previousScrollY));
+}
+
 function getTrackImageUrl(track = null) {
   return track?.image_url || track?.album?.images?.[0]?.url || "";
 }
@@ -2277,7 +2725,7 @@ function getSpotifyUrl(item = null) {
   return item?.spotify_url || item?.external_urls?.spotify || "";
 }
 
-function createWrappedRankedItem({ rank, imageUrl = "", title = "", detail = "", badge = "", href = "" }) {
+function createWrappedRankedItem({ imageUrl = "", title = "", detail = "", badge = "", href = "" }) {
   const wrapper = document.createElement(href ? "a" : "article");
   wrapper.className = "wrapped-ranked-item";
   if (href) {
@@ -2287,11 +2735,10 @@ function createWrappedRankedItem({ rank, imageUrl = "", title = "", detail = "",
   }
 
   const imageMarkup = imageUrl
-    ? `<img src="${escapeHtml(imageUrl)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">`
-    : `<span class="wrapped-ranked-placeholder" aria-hidden="true">${escapeHtml(String(rank || ""))}</span>`;
+    ? `<img src="${escapeHtml(imageUrl)}" alt="" loading="eager" decoding="async" referrerpolicy="no-referrer">`
+    : `<span class="wrapped-ranked-placeholder" aria-hidden="true">${escapeHtml((title || "?").slice(0, 1))}</span>`;
 
   wrapper.innerHTML = `
-    <span class="wrapped-rank">${escapeHtml(String(rank || ""))}</span>
     <span class="wrapped-ranked-art">${imageMarkup}</span>
     <span class="wrapped-ranked-copy">
       <strong>${escapeHtml(title || "Unknown")}</strong>
@@ -2302,18 +2749,40 @@ function createWrappedRankedItem({ rank, imageUrl = "", title = "", detail = "",
   return wrapper;
 }
 
+function getWrappedPeriod(range = state.activeWrappedRange) {
+  const periods = {
+    short_term: { label: "Last 4 Weeks", story: "Your last 4 weeks" },
+    medium_term: { label: "Last 6 Months", story: "Your last 6 months" },
+    long_term: { label: "All Time", story: "Your long-term listening" },
+  };
+  return periods[range] || periods.short_term;
+}
+
+function setWrappedBusy(isBusy) {
+  elements.wrappedSection?.setAttribute("aria-busy", String(isBusy));
+  elements.wrappedRangeButtons.forEach((button) => {
+    button.disabled = isBusy;
+  });
+}
+
 function renderWrappedLoading() {
+  setWrappedBusy(true);
   setWrappedStatus("Building your Wrapped Anytime report...");
-  if (elements.wrappedContext) {
-    elements.wrappedContext.textContent = "Pulling top artists, songs, genres, replay loops, and personality signals.";
-  }
   if (elements.wrappedShareCard) {
     elements.wrappedShareCard.classList.add("is-loading");
     elements.wrappedShareCard.innerHTML = `
-      <p class="wrapped-card-kicker">Spotify Wrapped Anytime</p>
-      <h3>Generating report</h3>
-      <p class="wrapped-card-summary">Finding the shape of your listening history.</p>
+      <div class="wrapped-story-copy">
+        <p class="wrapped-story-period">${escapeHtml(getWrappedPeriod().story)}</p>
+        <p class="wrapped-story-eyebrow">Listening personality</p>
+        <h3>Generating report</h3>
+        <div class="wrapped-story-loading-lines" aria-hidden="true"><span></span><span></span></div>
+        <p class="wrapped-story-summary">Finding the shape of your listening history.</p>
+      </div>
+      <div class="wrapped-story-placeholder" aria-hidden="true"></div>
     `;
+  }
+  if (elements.wrappedMoodGrid) {
+    elements.wrappedMoodGrid.innerHTML = Array.from({ length: 4 }, () => '<span class="wrapped-metric-skeleton" aria-hidden="true"></span>').join("");
   }
   [elements.wrappedTopArtists, elements.wrappedTopGenres, elements.wrappedReplayedTracks].forEach((container) => {
     if (!container) return;
@@ -2328,25 +2797,21 @@ function renderWrappedLoading() {
 
 function renderWrappedSignedOut() {
   state.wrappedReport = null;
+  setWrappedBusy(false);
   syncWrappedRangeButtons();
   setWrappedStatus("Connect Spotify to generate your report.");
-  if (elements.wrappedContext) {
-    elements.wrappedContext.textContent = "Your top artists, songs, genres, and listening personality on demand.";
-  }
   if (elements.wrappedShareCard) {
     elements.wrappedShareCard.classList.remove("is-loading");
     elements.wrappedShareCard.innerHTML = `
-      <p class="wrapped-card-kicker">Spotify Wrapped Anytime</p>
-      <h3>Connect Spotify</h3>
-      <p class="wrapped-card-summary">Generate a personal report once Spotify is connected.</p>
+      <div class="wrapped-story-copy">
+        <p class="wrapped-story-period">${escapeHtml(getWrappedPeriod().story)}</p>
+        <p class="wrapped-story-eyebrow">Listening personality</p>
+        <h3>Connect Spotify</h3>
+        <p class="wrapped-story-detail">Your listening personality appears here after login.</p>
+        <p class="wrapped-story-summary">Generate a personal report from your Spotify listening.</p>
+      </div>
+      <div class="wrapped-story-placeholder" aria-hidden="true"></div>
     `;
-  }
-  if (elements.wrappedPersonalityTitle) elements.wrappedPersonalityTitle.textContent = "Waiting for your report";
-  if (elements.wrappedPersonalityDetail) elements.wrappedPersonalityDetail.textContent = "Your personality appears after login.";
-  if (elements.wrappedDiscoveryScore) elements.wrappedDiscoveryScore.textContent = "--";
-  if (elements.wrappedDiscoveryLabel) elements.wrappedDiscoveryLabel.textContent = "No score yet";
-  if (elements.wrappedDiscoveryDetail) {
-    elements.wrappedDiscoveryDetail.textContent = "Genre range, artist variety, and newer releases shape this score.";
   }
   if (elements.wrappedMoodGrid) elements.wrappedMoodGrid.innerHTML = "";
   renderEmptyState(elements.wrappedTopArtists, "No artists yet.", "Connect Spotify to load your top artists.");
@@ -2363,7 +2828,7 @@ function renderWrappedMood(dna = []) {
     return;
   }
   dna.forEach((item) => {
-    const tile = document.createElement("article");
+    const tile = document.createElement("div");
     tile.className = "wrapped-mood-tile";
     tile.innerHTML = `
       <span>${escapeHtml(item.label || "")}</span>
@@ -2382,16 +2847,16 @@ function renderWrappedGenres(genres = []) {
     return;
   }
   const maxCount = Math.max(...genres.map((genre) => genre.count || 0), 1);
-  genres.slice(0, 8).forEach((genre, index) => {
+  genres.slice(0, 6).forEach((genre) => {
     const row = document.createElement("article");
     row.className = "wrapped-genre-row";
-    const percent = Math.max(10, Math.round(((genre.count || 0) / maxCount) * 100));
+    const percent = Math.max(10, Math.min(100, ((genre.count || 0) / maxCount) * 100));
+    row.style.setProperty("--genre-share", `${percent}%`);
     row.innerHTML = `
       <div>
-        <span>${String(index + 1).padStart(2, "0")}</span>
         <strong>${escapeHtml(formatGenreLabel(genre.name || ""))}</strong>
       </div>
-      <div class="wrapped-genre-meter" aria-hidden="true"><span style="width: ${percent}%"></span></div>
+      <div class="wrapped-genre-meter" aria-hidden="true"><span></span></div>
     `;
     elements.wrappedTopGenres.appendChild(row);
   });
@@ -2406,16 +2871,15 @@ function renderWrappedArtists(artists = []) {
   }
   artists.slice(0, 6).forEach((artist, index) => {
     const genres = (artist.genres || []).slice(0, 2).map(formatGenreLabel).join(" / ");
-    elements.wrappedTopArtists.appendChild(
-      createWrappedRankedItem({
-        rank: index + 1,
-        imageUrl: getArtistImageUrl(artist),
-        title: artist.name || "Unknown artist",
-        detail: genres || "Top artist",
-        badge: typeof artist.popularity === "number" ? `${artist.popularity}%` : "",
-        href: getSpotifyUrl(artist),
-      })
-    );
+    const item = createWrappedRankedItem({
+      imageUrl: getArtistImageUrl(artist),
+      title: artist.name || "Unknown artist",
+      detail: index === 0 ? `Top artist${genres ? ` · ${genres}` : ""}` : genres || "Artist",
+      href: getSpotifyUrl(artist),
+    });
+    item.classList.add("wrapped-artist-item");
+    if (index === 0) item.classList.add("is-featured");
+    elements.wrappedTopArtists.appendChild(item);
   });
 }
 
@@ -2429,10 +2893,14 @@ function renderWrappedTracks(tracks = []) {
   elements.wrappedTopTracks.appendChild(
     createTrackRow(tracks.slice(0, 8), {
       rowClass: "wrapped-card-row",
-      badge: (_track, index) => "",
+      badge: (_track, index) => (index === 0 ? "Top song" : ""),
       detail: (track) => {
         const year = track.release_year ? `${track.release_year}` : "";
         return year ? `Released ${year}` : track.album?.name || "";
+      },
+      decorate: (card, _track, index) => {
+        card.classList.add("wrapped-song-card");
+        if (index === 0) card.classList.add("is-top-song");
       },
     })
   );
@@ -2445,18 +2913,17 @@ function renderWrappedReplays(replayed = []) {
     renderEmptyState(elements.wrappedReplayedTracks, "No replay loops yet.", "Repeat plays from recently played tracks will appear here.");
     return;
   }
-  replayed.slice(0, 5).forEach((item, index) => {
+  replayed.slice(0, 5).forEach((item) => {
     const track = item.track || {};
-    elements.wrappedReplayedTracks.appendChild(
-      createWrappedRankedItem({
-        rank: index + 1,
-        imageUrl: getTrackImageUrl(track),
-        title: track.name || "Unknown track",
-        detail: getArtistLabel(track),
-        badge: `${item.play_count || 1}x`,
-        href: getSpotifyUrl(track),
-      })
-    );
+    const replay = createWrappedRankedItem({
+      imageUrl: getTrackImageUrl(track),
+      title: track.name || "Unknown track",
+      detail: getArtistLabel(track),
+      badge: `${item.play_count || 1}×`,
+      href: getSpotifyUrl(track),
+    });
+    replay.classList.add("wrapped-replay-item");
+    elements.wrappedReplayedTracks.appendChild(replay);
   });
 }
 
@@ -2469,27 +2936,42 @@ function renderWrappedShareCard(report) {
   const trackImage = getTrackImageUrl(topTrack);
   const artistImage = getArtistImageUrl(topArtist);
   const imageUrl = artistImage || trackImage;
+  const personality = report?.listening_personality || card.personality || {};
+  const discovery = report?.discovery_score || card.discovery_score || {};
+  const discoveryScore = Math.max(0, Math.min(100, Number(discovery.score) || 0));
+  const period = getWrappedPeriod();
   elements.wrappedShareCard.classList.remove("is-loading");
   elements.wrappedShareCard.innerHTML = `
-    <p class="wrapped-card-kicker">${escapeHtml(card.kicker || "Spotify Wrapped Anytime")}</p>
-    <h3>${escapeHtml(card.headline || "Your Wrapped Anytime")}</h3>
-    <p class="wrapped-card-summary">${escapeHtml(card.summary || report?.taste_summary || "")}</p>
-    <div class="wrapped-card-visual">
+    <div class="wrapped-story-copy">
+      <p class="wrapped-story-period">${escapeHtml(period.story)}</p>
+      <p class="wrapped-story-eyebrow">Listening personality</p>
+      <h3>${escapeHtml(personality.title || "The Taste Architect")}</h3>
+      <p class="wrapped-story-detail">${escapeHtml(personality.detail || "")}</p>
+      <p class="wrapped-story-summary">${escapeHtml(card.summary || report?.taste_summary || "")}</p>
+    </div>
+    <figure class="wrapped-featured-artist">
       ${
         imageUrl
-          ? `<img src="${escapeHtml(imageUrl)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">`
-          : '<span aria-hidden="true"></span>'
+          ? `<img src="${escapeHtml(imageUrl)}" alt="" loading="eager" decoding="async" referrerpolicy="no-referrer">`
+          : '<span class="wrapped-story-placeholder" aria-hidden="true"></span>'
       }
-      <div>
-        <span>Top Artist</span>
+      <figcaption>
+        <span>Top artist</span>
         <strong>${escapeHtml(topArtist.name || "Unknown")}</strong>
+      </figcaption>
+    </figure>
+    <section class="wrapped-discovery-story" aria-label="Discovery score: ${escapeHtml(String(discoveryScore))} percent">
+      <div class="wrapped-discovery-heading">
+        <strong>${escapeHtml(String(discoveryScore))}%</strong>
+        <span>Discovery</span>
       </div>
-    </div>
-    <dl class="wrapped-card-stats">
-      <div><dt>Song</dt><dd>${escapeHtml(topTrack.name || "Unknown")}</dd></div>
+      <div class="wrapped-discovery-scale" style="--discovery-score: ${escapeHtml(String(discoveryScore))}%" aria-hidden="true"><span></span></div>
+      <p class="wrapped-discovery-label">${escapeHtml(discovery.label || "Discovery Score")}</p>
+      <p class="wrapped-discovery-detail">${escapeHtml(discovery.detail || "")}</p>
+    </section>
+    <dl class="wrapped-story-facts">
+      <div><dt>Top Song</dt><dd>${escapeHtml(topTrack.name || "Unknown")}</dd></div>
       <div><dt>Genre</dt><dd>${escapeHtml(formatGenreLabel(topGenre.name || ""))}</dd></div>
-      <div><dt>Type</dt><dd>${escapeHtml(card.personality?.title || "")}</dd></div>
-      <div><dt>Discovery</dt><dd>${escapeHtml(String(card.discovery_score?.score ?? "--"))}%</dd></div>
     </dl>
   `;
 }
@@ -2500,25 +2982,13 @@ function renderWrappedReport(report) {
     return;
   }
   state.wrappedReport = report;
+  setWrappedBusy(false);
   syncWrappedRangeButtons();
-  setWrappedStatus(report.data_note || "", "success");
-  if (elements.wrappedContext) {
-    elements.wrappedContext.textContent = report.taste_summary || "Your Wrapped Anytime report is ready.";
-  }
-  if (elements.wrappedPersonalityTitle) {
-    elements.wrappedPersonalityTitle.textContent = report.listening_personality?.title || "Taste Architect";
-  }
-  if (elements.wrappedPersonalityDetail) {
-    elements.wrappedPersonalityDetail.textContent = report.listening_personality?.detail || "";
-  }
-  if (elements.wrappedDiscoveryScore) {
-    elements.wrappedDiscoveryScore.textContent = `${report.discovery_score?.score ?? "--"}%`;
-  }
-  if (elements.wrappedDiscoveryLabel) {
-    elements.wrappedDiscoveryLabel.textContent = report.discovery_score?.label || "Discovery Score";
-  }
-  if (elements.wrappedDiscoveryDetail) {
-    elements.wrappedDiscoveryDetail.textContent = report.discovery_score?.detail || "";
+  setWrappedStatus("");
+  const allTimeButton = [...elements.wrappedRangeButtons].find((button) => button.dataset.range === "long_term");
+  if (allTimeButton && report.data_note) {
+    allTimeButton.title = report.data_note;
+    allTimeButton.setAttribute("aria-label", `All Time. ${report.data_note}`);
   }
   renderWrappedShareCard(report);
   renderWrappedMood(report.mood_profile?.dna || []);
@@ -2530,8 +3000,10 @@ function renderWrappedReport(report) {
 
 async function fetchWrappedReport({ force = false } = {}) {
   if (state.wrappedPending || !state.authenticated) return;
+  const previousScrollY = window.scrollY || document.documentElement.scrollTop || 0;
   state.wrappedPending = true;
   renderWrappedLoading();
+  window.requestAnimationFrame(() => jumpWindowScroll(previousScrollY));
   try {
     const query = new URLSearchParams({
       time_range: state.activeWrappedRange,
@@ -2556,23 +3028,14 @@ async function fetchWrappedReport({ force = false } = {}) {
       return;
     }
     renderWrappedReport(data);
+    window.requestAnimationFrame(() => jumpWindowScroll(previousScrollY));
   } catch (_error) {
     setWrappedStatus("Wrapped Anytime is unavailable right now.", "error");
     if (elements.wrappedShareCard) elements.wrappedShareCard.classList.remove("is-loading");
   } finally {
     state.wrappedPending = false;
+    setWrappedBusy(false);
   }
-}
-
-function drawRoundedRect(context, x, y, width, height, radius) {
-  const r = Math.min(radius, width / 2, height / 2);
-  context.beginPath();
-  context.moveTo(x + r, y);
-  context.arcTo(x + width, y, x + width, y + height, r);
-  context.arcTo(x + width, y + height, x, y + height, r);
-  context.arcTo(x, y + height, x, y, r);
-  context.arcTo(x, y, x + width, y, r);
-  context.closePath();
 }
 
 function drawWrappedText(context, text, x, y, maxWidth, lineHeight, maxLines = 4) {
@@ -2606,19 +3069,43 @@ function drawWrappedText(context, text, x, y, maxWidth, lineHeight, maxLines = 4
   return y + visibleLines.length * lineHeight;
 }
 
-function canvasBlob(canvas) {
-  return new Promise((resolve, reject) => {
-    canvas.toBlob((blob) => {
-      if (blob) {
-        resolve(blob);
-      } else {
-        reject(new Error("image_export_failed"));
-      }
-    }, "image/png", 0.94);
+function loadWrappedCanvasImage(imageUrl) {
+  return new Promise((resolve) => {
+    if (!imageUrl) {
+      resolve(null);
+      return;
+    }
+    const image = new Image();
+    image.crossOrigin = "anonymous";
+    image.referrerPolicy = "no-referrer";
+    image.onload = () => resolve(image);
+    image.onerror = () => resolve(null);
+    image.src = imageUrl;
   });
 }
 
-function buildWrappedImageCanvas(report) {
+function drawWrappedCoverImage(context, image, x, y, width, height) {
+  if (/\.svg(?:\?|$)/i.test(image.currentSrc || image.src || "")) {
+    context.drawImage(image, x, y, width, height);
+    return;
+  }
+  const sourceRatio = image.naturalWidth / image.naturalHeight;
+  const targetRatio = width / height;
+  let sourceWidth = image.naturalWidth;
+  let sourceHeight = image.naturalHeight;
+  let sourceX = 0;
+  let sourceY = 0;
+  if (sourceRatio > targetRatio) {
+    sourceWidth = image.naturalHeight * targetRatio;
+    sourceX = (image.naturalWidth - sourceWidth) / 2;
+  } else {
+    sourceHeight = image.naturalWidth / targetRatio;
+    sourceY = (image.naturalHeight - sourceHeight) / 2;
+  }
+  context.drawImage(image, sourceX, sourceY, sourceWidth, sourceHeight, x, y, width, height);
+}
+
+async function buildWrappedImageCanvas(report) {
   const card = report?.share_card || {};
   const canvas = document.createElement("canvas");
   const context = canvas.getContext("2d");
@@ -2630,88 +3117,97 @@ function buildWrappedImageCanvas(report) {
   const topTrack = card.top_track || {};
   const topArtist = card.top_artist || {};
   const topGenre = card.top_genre || {};
-  const discovery = card.discovery_score || {};
-  const personality = card.personality || {};
-  const headline = card.headline || "Your Wrapped Anytime";
-  const summary = card.summary || report?.taste_summary || "";
+  const discovery = report?.discovery_score || card.discovery_score || {};
+  const personality = report?.listening_personality || card.personality || {};
   const artistName = topArtist.name || "Unknown";
   const trackName = topTrack.name || "Unknown";
   const genreName = formatGenreLabel(topGenre.name || "Mixed");
   const score = `${discovery.score ?? "--"}%`;
+  const rangeLabel = report?.time_range?.label || getWrappedPeriod().label;
+  const visibleArtistImage = elements.wrappedShareCard?.querySelector(".wrapped-featured-artist img");
+  const artistImage = visibleArtistImage?.complete && visibleArtistImage.naturalWidth
+    ? visibleArtistImage
+    : await loadWrappedCanvasImage(getArtistImageUrl(topArtist) || getTrackImageUrl(topTrack));
 
-  const bg = context.createLinearGradient(0, 0, width, height);
-  bg.addColorStop(0, "#10151b");
-  bg.addColorStop(0.48, "#191427");
-  bg.addColorStop(1, "#090b11");
-  context.fillStyle = bg;
+  const styles = getComputedStyle(document.documentElement);
+  const background = styles.getPropertyValue("--bg-depth").trim() || "#090b11";
+  const accent = styles.getPropertyValue("--accent").trim() || "#9fd7ca";
+  const secondary = styles.getPropertyValue("--color-secondary").trim() || "#f2c7db";
+  const accentInk = styles.getPropertyValue("--accent-ink").trim() || "#11131a";
+  const text = styles.getPropertyValue("--text").trim() || "#f8f7fb";
+  const textSoft = styles.getPropertyValue("--text-soft").trim() || "#e5e2ed";
+
+  context.fillStyle = background;
   context.fillRect(0, 0, width, height);
+  context.fillStyle = accent;
+  context.fillRect(0, 0, width, 278);
 
-  const glowA = context.createRadialGradient(180, 170, 0, 180, 170, 460);
-  glowA.addColorStop(0, "rgba(159, 215, 202, 0.34)");
-  glowA.addColorStop(1, "rgba(159, 215, 202, 0)");
-  context.fillStyle = glowA;
-  context.fillRect(0, 0, width, height);
+  context.fillStyle = accentInk;
+  context.font = "700 22px 'DM Sans', Arial, sans-serif";
+  context.fillText("SPOTIFEEL / WRAPPED ANYTIME", 70, 64);
+  context.textAlign = "right";
+  context.fillText(String(rangeLabel).toUpperCase(), 1010, 64);
+  context.textAlign = "left";
+  context.font = "600 72px 'Bodoni Moda', Georgia, serif";
+  drawWrappedText(context, personality.title || "The Taste Architect", 70, 145, 880, 67, 2);
 
-  const glowB = context.createRadialGradient(910, 250, 0, 910, 250, 420);
-  glowB.addColorStop(0, "rgba(242, 199, 219, 0.28)");
-  glowB.addColorStop(1, "rgba(242, 199, 219, 0)");
-  context.fillStyle = glowB;
-  context.fillRect(0, 0, width, height);
+  if (artistImage) {
+    drawWrappedCoverImage(context, artistImage, 70, 328, 622, 560);
+  } else {
+    context.fillStyle = "#20232b";
+    context.fillRect(70, 328, 622, 560);
+    context.fillStyle = textSoft;
+    context.font = "500 210px 'Bodoni Moda', Georgia, serif";
+    context.fillText(artistName.slice(0, 1).toUpperCase(), 270, 680);
+  }
 
-  context.save();
-  drawRoundedRect(context, 74, 78, 932, 1194, 54);
-  context.fillStyle = "rgba(255, 255, 255, 0.07)";
-  context.fill();
-  context.strokeStyle = "rgba(255, 255, 255, 0.18)";
+  context.fillStyle = "rgba(7, 9, 14, 0.9)";
+  context.fillRect(70, 792, 622, 96);
+  context.fillStyle = accent;
+  context.font = "700 17px 'DM Sans', Arial, sans-serif";
+  context.fillText("TOP ARTIST", 100, 829);
+  context.fillStyle = text;
+  context.font = "500 38px 'Bodoni Moda', Georgia, serif";
+  drawWrappedText(context, artistName, 100, 868, 552, 40, 1);
+
+  context.fillStyle = secondary;
+  context.fillRect(692, 328, 318, 560);
+  context.fillStyle = text;
+  context.font = "500 138px 'Bodoni Moda', Georgia, serif";
+  context.fillText(score, 732, 510);
+  context.font = "700 18px 'DM Sans', Arial, sans-serif";
+  context.fillText("DISCOVERY", 736, 553);
+  context.fillRect(736, 586, 230, 5);
+  context.font = "700 22px 'DM Sans', Arial, sans-serif";
+  drawWrappedText(context, discovery.label || "Discovery Score", 736, 645, 230, 28, 2);
+  context.font = "400 19px 'DM Sans', Arial, sans-serif";
+  drawWrappedText(context, discovery.detail || "", 736, 724, 230, 29, 4);
+  context.font = "700 16px 'DM Sans', Arial, sans-serif";
+  context.fillText("TOP GENRE", 736, 830);
+  context.font = "500 31px 'Bodoni Moda', Georgia, serif";
+  drawWrappedText(context, genreName, 736, 865, 230, 33, 1);
+
+  context.strokeStyle = "rgba(255, 255, 255, 0.24)";
   context.lineWidth = 2;
+  context.beginPath();
+  context.moveTo(70, 958);
+  context.lineTo(1010, 958);
   context.stroke();
-  context.restore();
+  context.fillStyle = accent;
+  context.font = "700 18px 'DM Sans', Arial, sans-serif";
+  context.fillText("TOP SONG", 70, 1010);
+  context.fillStyle = text;
+  context.font = "500 65px 'Bodoni Moda', Georgia, serif";
+  drawWrappedText(context, trackName, 70, 1086, 920, 65, 2);
 
-  context.fillStyle = "#9fd7ca";
-  context.font = "700 30px Poppins, Arial, sans-serif";
-  context.fillText("SPOTIFEEL", 124, 166);
-
-  context.fillStyle = "#f8f7fb";
-  context.font = "800 84px Poppins, Arial, sans-serif";
-  drawWrappedText(context, headline, 124, 280, 820, 84, 3);
-
-  context.fillStyle = "#e5e2ed";
-  context.font = "400 30px Poppins, Arial, sans-serif";
-  drawWrappedText(context, summary, 124, 520, 790, 44, 4);
-
-  const statCards = [
-    ["Top Artist", artistName],
-    ["Top Song", trackName],
-    ["Top Genre", genreName],
-    ["Discovery", score],
-  ];
-  statCards.forEach(([label, value], index) => {
-    const x = 124 + (index % 2) * 416;
-    const y = 740 + Math.floor(index / 2) * 168;
-    drawRoundedRect(context, x, y, 370, 126, 28);
-    context.fillStyle = "rgba(255, 255, 255, 0.09)";
-    context.fill();
-    context.fillStyle = "#a9a8b8";
-    context.font = "700 22px Poppins, Arial, sans-serif";
-    context.fillText(label.toUpperCase(), x + 26, y + 42);
-    context.fillStyle = "#f8f7fb";
-    context.font = "700 32px Poppins, Arial, sans-serif";
-    drawWrappedText(context, value, x + 26, y + 86, 318, 36, 1);
-  });
-
-  drawRoundedRect(context, 124, 1100, 790, 112, 30);
-  context.fillStyle = "rgba(159, 215, 202, 0.14)";
-  context.fill();
-  context.fillStyle = "#9fd7ca";
-  context.font = "700 24px Poppins, Arial, sans-serif";
-  context.fillText("LISTENING PERSONALITY", 154, 1142);
-  context.fillStyle = "#f8f7fb";
-  context.font = "800 38px Poppins, Arial, sans-serif";
-  drawWrappedText(context, personality.title || "Taste Architect", 154, 1190, 720, 42, 1);
-
-  context.fillStyle = "rgba(255, 255, 255, 0.55)";
-  context.font = "500 24px Poppins, Arial, sans-serif";
-  context.fillText("spotifeel.app", 124, 1260);
+  context.fillStyle = textSoft;
+  context.font = "400 24px 'DM Sans', Arial, sans-serif";
+  drawWrappedText(context, personality.detail || "", 70, 1240, 760, 34, 2);
+  context.fillStyle = accent;
+  context.fillRect(70, 1300, 48, 5);
+  context.fillStyle = "rgba(255, 255, 255, 0.62)";
+  context.font = "500 18px 'DM Sans', Arial, sans-serif";
+  context.fillText("spotifeel.app", 138, 1307);
 
   return canvas;
 }
@@ -2735,7 +3231,7 @@ async function shareWrappedImage() {
 
   try {
     setWrappedStatus("Creating your share image...");
-    const canvas = buildWrappedImageCanvas(state.wrappedReport);
+    const canvas = await buildWrappedImageCanvas(state.wrappedReport);
     const blob = await canvasBlob(canvas);
     const filename = `spotifeel-${state.activeWrappedRange}.png`;
     const file = new File([blob], filename, { type: "image/png" });
@@ -2757,6 +3253,7 @@ async function shareWrappedImage() {
 }
 
 function resetSignedOutUi() {
+  state.lyricsRequestToken += 1;
   state.currentItem = null;
   state.currentTrackKey = null;
   state.previousTrackSnapshot = null;
@@ -2799,41 +3296,25 @@ function resetSignedOutUi() {
   setActiveCard("");
   prepareVisualizerProfile("default");
   paintVisualizer(0);
-  renderEmptyState(
-    elements.recentList,
-    "No recent tracks yet.",
-    "Sign in with Spotify to load your listening history."
-  );
-  if (elements.recentContext) {
-    elements.recentContext.textContent = "A color memory of what today has sounded like.";
-  }
+  renderDayUnavailable("No recent tracks yet.", "Sign in with Spotify to load your listening history.");
   renderEmptyState(
     elements.recList,
     "Recommendations are waiting.",
     "Play a song after logging in and SpotiFeel will build similar picks."
   );
-  if (elements.recContext) {
-    elements.recContext.textContent = "Play something and SpotiFeel will build recommendations around it.";
-  }
   setPlaylistStatus("Log in before creating playlists.");
   setPlaylistCardsDisabled(false);
   renderWrappedSignedOut();
 }
 
 async function getJson(url, options) {
-  const response = await fetch(url, options);
-  let data = null;
-  try {
-    data = await response.json();
-  } catch (_error) {
-    data = null;
-  }
-  return { response, data };
+  return apiRequest(url, options);
 }
 
 async function syncSession() {
   try {
     const { response, data } = await getJson("/api/session");
+    if (response.ok) setCsrfToken(data?.csrf_token || "");
     if (response.ok && data?.configured === false) {
       state.authenticated = false;
       syncAuthButtons();
@@ -2864,6 +3345,78 @@ async function syncSession() {
     syncAuthButtons();
     showBanner("SpotiFeel could not verify your Spotify session.", "Try Logging In");
     resetSignedOutUi();
+  }
+}
+
+async function fetchTrackMetadata(trackKey, lyricsRequestToken = state.lyricsRequestToken) {
+  try {
+    const { response, data } = await getJson("/api/track-metadata");
+    if (response.status === 401 || data?.error === "not_authenticated") {
+      state.authenticated = false;
+      syncAuthButtons();
+      resetSignedOutUi();
+      showBanner("Your Spotify session expired. Log in again to reload track details.", "Log In Again");
+      return;
+    }
+    if (
+      !response.ok ||
+      state.currentTrackKey !== trackKey ||
+      state.lyricsRequestToken !== lyricsRequestToken ||
+      (data?.track_id && data.track_id !== state.currentItem?.id)
+    ) return;
+
+    const genre = data?.genre?.data;
+    if (data?.genre?.status === 200 && genre) {
+      state.currentGenre = genre.genre || state.currentGenre || "";
+      state.currentTags = Array.isArray(genre.tags) ? genre.tags : [];
+      state.currentMood = resolveMoodContext(state.currentGenre, state.currentTags);
+      setReactiveProfile(genre.audio_profile || null);
+      if (state.themeMode !== "album") applyGenreTheme(state.currentGenre);
+      updateGenreChip();
+      updateMoodChip();
+      if (genre.arc?.detail) renderHeroArc(genre.arc.detail);
+      else syncHeroArc();
+      setHeroMeta({ item: state.currentItem, context: state.currentMood?.context ?? "" });
+      updateTrackCard(state.currentItem);
+    }
+
+    const lyrics = data?.lyrics?.data;
+    if (lyrics?.track_id && lyrics.track_id !== state.currentItem?.id) return;
+    const activeTitle = lyrics?.track || state.currentItem?.name || "Lyrics unavailable.";
+    const activeArtist = lyrics?.artist || getArtistLabel(state.currentItem);
+    if (data?.lyrics?.status === 200 && lyrics?.lyrics) {
+      renderLyricsView({
+        title: activeTitle,
+        subtitle: activeArtist,
+        content: lyrics.lyrics,
+        syncedLyrics: lyrics.synced_lyrics || "",
+        timing: lyrics.timing || "plain",
+        source: lyrics.source || "",
+        searchUrls: lyrics.search_urls || null,
+        interactive: true,
+      });
+      syncLyricsPlayback(getCurrentProgressMs(), { forceFollow: true });
+    } else {
+      renderLyricsView({
+        title: activeTitle,
+        subtitle: `Lyrics weren't found for ${activeArtist} yet.`,
+        content: "SpotiFeel couldn't pull lyrics for this song right now. Use the links below to keep following along.",
+        searchUrls: lyrics?.search_urls || null,
+        interactive: false,
+      });
+    }
+
+    const youtube = data?.youtube?.data;
+    setYouTubeLink(youtube?.youtube_url || youtube?.youtube_search_url || "");
+  } catch (_error) {
+    if (state.currentTrackKey !== trackKey || state.lyricsRequestToken !== lyricsRequestToken) return;
+    setYouTubeLink("");
+    renderLyricsView({
+      title: state.currentItem?.name || "Lyrics unavailable.",
+      subtitle: "Track metadata did not respond.",
+      content: "Try again in a moment while the optional music services recover.",
+      interactive: false,
+    });
   }
 }
 
@@ -2898,7 +3451,7 @@ async function fetchGenreNow(trackKey) {
   } catch (_error) {}
 }
 
-async function fetchLyrics(trackKey) {
+async function fetchLyrics(trackKey, lyricsRequestToken = state.lyricsRequestToken) {
   if (!state.authenticated) return;
   try {
     const { response, data } = await getJson("/api/lyrics-now");
@@ -2909,7 +3462,11 @@ async function fetchLyrics(trackKey) {
       showBanner("Your Spotify session expired. Log in again to view lyrics.", "Log In Again");
       return;
     }
-    if (state.currentTrackKey !== trackKey) return;
+    if (
+      state.currentTrackKey !== trackKey ||
+      state.lyricsRequestToken !== lyricsRequestToken ||
+      (data?.track_id && data.track_id !== state.currentItem?.id)
+    ) return;
 
     const activeTitle = data?.track || state.currentItem?.name || "Lyrics unavailable.";
     const activeArtist =
@@ -2933,12 +3490,15 @@ async function fetchLyrics(trackKey) {
       title: data.track || state.currentItem?.name || "Lyrics",
       subtitle: activeArtist || "",
       content: data.lyrics,
+      syncedLyrics: data.synced_lyrics || "",
+      timing: data.timing || "plain",
+      source: data.source || "",
       searchUrls: data.search_urls || null,
       interactive: true,
     });
-    syncLyricsPlayback(progressMs);
+    syncLyricsPlayback(getCurrentProgressMs(), { forceFollow: true });
   } catch (_error) {
-    if (state.currentTrackKey !== trackKey) return;
+    if (state.currentTrackKey !== trackKey || state.lyricsRequestToken !== lyricsRequestToken) return;
     renderLyricsView({
       title: state.currentItem?.name || "Lyrics unavailable.",
       subtitle: "The lyrics service didn't respond for this track.",
@@ -2960,9 +3520,6 @@ async function fetchYouTubeNow(trackKey) {
 
 async function fetchRecommendations(trackKey) {
   try {
-    if (elements.recContext && state.currentItem?.name) {
-      elements.recContext.textContent = `Building a listening path around "${state.currentItem.name}".`;
-    }
     renderSkeletonCards(elements.recList, 6);
     const { response, data } = await getJson("/api/recommendations");
     if (response.status === 401 || data?.error === "not_authenticated") {
@@ -2973,7 +3530,7 @@ async function fetchRecommendations(trackKey) {
       return;
     }
     if (state.currentTrackKey !== trackKey) return;
-    if (!response.ok || !Array.isArray(data?.groups) || data.groups.length === 0) {
+    if (!response.ok || !hasRecommendationGroups(data)) {
       renderEmptyState(
         elements.recList,
         "No recommendations yet.",
@@ -2981,12 +3538,7 @@ async function fetchRecommendations(trackKey) {
       );
       return;
     }
-    if (elements.recContext) {
-      elements.recContext.textContent =
-        data?.profile_summary ||
-        `Curated because you listened to "${data?.based_on?.track || state.currentItem?.name || "this track"}".`;
-    }
-    renderRecommendationGroups(data.groups);
+    renderRecommendationGroups(data.groups, data?.based_on?.track || state.currentItem?.name || "this track");
   } catch (_error) {
     renderEmptyState(
       elements.recList,
@@ -3049,6 +3601,7 @@ async function fetchNowPlaying({ forceMeta = false, force = false } = {}) {
     }
 
     if (data?.playing === false || !data?.item) {
+      state.lyricsRequestToken += 1;
       state.currentItem = null;
       state.currentTrackKey = null;
       state.previousTrackSnapshot = null;
@@ -3083,9 +3636,6 @@ async function fetchNowPlaying({ forceMeta = false, force = false } = {}) {
       setActiveCard("");
       prepareVisualizerProfile("default");
       paintVisualizer(0);
-      if (elements.recContext) {
-        elements.recContext.textContent = "Play something and SpotiFeel will build recommendations around it.";
-      }
       renderEmptyState(
         elements.recList,
         "Play a song to generate recommendations.",
@@ -3113,6 +3663,7 @@ async function fetchNowPlaying({ forceMeta = false, force = false } = {}) {
 
     state.currentTrackKey = trackKey;
     if (trackChanged) {
+      state.lyricsRequestToken += 1;
       state.currentGenre = null;
       state.currentTags = [];
       state.currentMood = null;
@@ -3122,7 +3673,6 @@ async function fetchNowPlaying({ forceMeta = false, force = false } = {}) {
       clearReactiveProfile();
       setYouTubeLink("");
       syncVinylMotion({ reset: true });
-      setNowView("card");
       triggerTrackTransition();
       renderLyricsLoadingState({
         title: item.name || "Loading lyrics...",
@@ -3134,9 +3684,7 @@ async function fetchNowPlaying({ forceMeta = false, force = false } = {}) {
 
     if (trackChanged || forceMeta) {
       applyAlbumTheme(trackKey, item.album?.images?.[0]?.url || "");
-      fetchGenreNow(trackKey);
-      fetchLyrics(trackKey);
-      fetchYouTubeNow(trackKey);
+      fetchTrackMetadata(trackKey, state.lyricsRequestToken);
       fetchRecommendations(trackKey);
     }
   } catch (_error) {
@@ -3150,10 +3698,8 @@ async function fetchNowPlaying({ forceMeta = false, force = false } = {}) {
 }
 
 function updateProgressBar() {
-  let current = 0;
+  const current = getCurrentProgressMs();
   if (durationMs > 0) {
-    const elapsed = isPlaying ? Date.now() - lastSync : 0;
-    current = Math.min(durationMs, progressMs + elapsed);
     const percent = Math.min(100, (current / durationMs) * 100);
     const scale = Math.max(0, percent / 100).toFixed(4);
     if (elements.progressBar) elements.progressBar.style.transform = `scaleX(${scale})`;
@@ -3175,7 +3721,7 @@ async function fetchRecentTracks({ force = false } = {}) {
   state.recentPending = true;
   state.lastRecentRequestAt = now;
   try {
-    renderSkeletonCards(elements.recentList, 6);
+    renderDayLoading();
     const { response, data } = await getJson("/api/recently-played?limit=50");
     if (response.status === 401 || data?.error === "not_authenticated") {
       state.authenticated = false;
@@ -3184,27 +3730,23 @@ async function fetchRecentTracks({ force = false } = {}) {
       showBanner("Your Spotify session expired. Log in again to reload recent tracks.", "Log In Again");
       return;
     }
-    if (!response.ok || !Array.isArray(data?.items) || data.items.length === 0) {
-      renderEmptyState(
-        elements.recentList,
-        "No recent tracks yet.",
-        "Play a few songs in Spotify and they will show up here."
+    if (!response.ok || !Array.isArray(data?.items)) {
+      renderDayUnavailable(
+        "Recently played is unavailable.",
+        "Spotify did not return listening history right now."
       );
-      if (elements.recentContext) {
-        elements.recentContext.textContent = "A color memory of what today has sounded like.";
-      }
+      return;
+    }
+    if (data.items.length === 0) {
+      renderFeelingHistory([]);
       return;
     }
     renderFeelingHistory(data.items);
   } catch (_error) {
-    renderEmptyState(
-      elements.recentList,
+    renderDayUnavailable(
       "Recently played is unavailable.",
       "Spotify did not return listening history right now."
     );
-    if (elements.recentContext) {
-      elements.recentContext.textContent = "A color memory of what today has sounded like.";
-    }
   } finally {
     state.recentPending = false;
   }
@@ -3245,6 +3787,7 @@ async function playTrack(track, card = null) {
   }
 
   state.currentTrackKey = trackKey;
+  state.lyricsRequestToken += 1;
   state.currentGenre = null;
   state.currentTags = [];
   state.currentMood = null;
@@ -3254,7 +3797,6 @@ async function playTrack(track, card = null) {
   durationMs = track.duration_ms || 0;
   isPlaying = true;
   lastSync = Date.now();
-  setNowView("card");
   triggerTrackTransition();
   renderLyricsLoadingState({
     title: track.name || "Loading lyrics...",
@@ -3307,9 +3849,15 @@ async function playTrack(track, card = null) {
     isPlaying = previousPlaying;
     lastSync = previousSync;
     if (previousItem) {
+      state.lyricsRequestToken += 1;
       applyNowPlaying(previousItem, { trackChanged: true });
       applyAlbumTheme(previousTrackKey, previousItem.album?.images?.[0]?.url || "");
       setActiveCard(previousTrackKey);
+      renderLyricsLoadingState({
+        title: previousItem.name || "Loading lyrics...",
+        subtitle: getArtistLabel(previousItem),
+      });
+      fetchTrackMetadata(previousTrackKey, state.lyricsRequestToken);
     } else {
       state.currentGenre = null;
       state.currentTags = [];
@@ -3351,7 +3899,8 @@ async function createPlaylist(type) {
   state.activePlaylist = type;
   setPlaylistCardsDisabled(true);
   setPlaylistStatus(`Creating a ${playlistName} playlist...`);
-  button?.classList.add("is-loading");
+  flashPlaylistCardState(button, "is-loading");
+  button?.setAttribute("aria-busy", "true");
 
   try {
     const { response, data } = await getJson(`/api/create-playlist/${encodeURIComponent(type)}`, {
@@ -3359,15 +3908,11 @@ async function createPlaylist(type) {
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        familiarity: state.playlistOptions.familiarity,
-        energy_bias: state.playlistOptions.energyBias,
-        artist_variety: state.playlistOptions.artistVariety,
-        explicit_mode: state.playlistOptions.explicitMode,
-      }),
+      body: JSON.stringify(buildPlaylistPayload(state.playlistOptions)),
     });
 
     if (response.status === 401 || data?.error === "not_authenticated") {
+      flashPlaylistCardState(button, "is-error");
       state.authenticated = false;
       syncAuthButtons();
       resetSignedOutUi();
@@ -3376,6 +3921,7 @@ async function createPlaylist(type) {
     }
 
     if (!response.ok || !data?.playlist_url) {
+      flashPlaylistCardState(button, "is-error");
       setPlaylistStatus(
         `Could not create the ${playlistName} playlist${data?.error ? `: ${data.error}` : "."}`,
         "error"
@@ -3397,15 +3943,14 @@ async function createPlaylist(type) {
     }
 
     setPlaylistStatus(data?.summary || `${playlistName} playlist created. Use the link below to open it.`, "success");
-    if (button) {
-      button.classList.add("is-success");
-      window.setTimeout(() => button.classList.remove("is-success"), 1800);
-    }
+    flashPlaylistCardState(button, "is-success");
   } catch (_error) {
+    flashPlaylistCardState(button, "is-error");
     setPlaylistStatus(`Playlist creation failed for ${playlistName}.`, "error");
   } finally {
     state.activePlaylist = null;
     setPlaylistCardsDisabled(false);
+    button?.removeAttribute("aria-busy");
     button?.classList.remove("is-loading");
   }
 }
@@ -3426,6 +3971,7 @@ async function togglePlayback() {
       showBanner("Spotify playback control needs an active device and a fresh session.");
       return;
     }
+    progressMs = getCurrentProgressMs();
     isPlaying = data.playing;
     lastSync = Date.now();
     if (isPlaying) triggerHeroPulse("play");
@@ -3436,8 +3982,43 @@ async function togglePlayback() {
   }
 }
 
+function bindStaticTabs(buttons, values, activate) {
+  buttons.forEach((button, index) => {
+    button.addEventListener("click", () => activate(values[index]));
+    button.addEventListener("keydown", (event) => {
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      event.preventDefault();
+      const direction = event.key === "ArrowRight" ? 1 : -1;
+      const nextIndex = (index + direction + buttons.length) % buttons.length;
+      activate(values[nextIndex], { focus: true });
+    });
+  });
+}
+
+function setupPrimarySectionObserver() {
+  if (!("IntersectionObserver" in window)) return;
+  const sections = [...document.querySelectorAll("main > .dashboard-section")];
+  const observer = new IntersectionObserver(
+    (entries) => {
+      const current = entries
+        .filter((entry) => entry.isIntersecting)
+        .sort((left, right) => right.intersectionRatio - left.intersectionRatio)[0];
+      if (!current?.target?.id) return;
+      elements.navLinks.forEach((link) => {
+        const active = link.getAttribute("href") === `#${current.target.id}`;
+        link.classList.toggle("is-current", active);
+        if (active) link.setAttribute("aria-current", "page");
+        else link.removeAttribute("aria-current");
+      });
+    },
+    { threshold: [0.35, 0.55, 0.75] }
+  );
+  sections.forEach((section) => observer.observe(section));
+}
+
 function setupEventHandlers() {
   window.addEventListener("resize", () => {
+    syncPersistentLayout();
     if (window.innerWidth < 960 && state.overviewMode) {
       state.overviewMode = false;
       applyOverviewMode();
@@ -3468,6 +4049,19 @@ function setupEventHandlers() {
     });
   });
 
+  if (elements.lyricsContent) {
+    elements.lyricsContent.addEventListener("wheel", pauseLyricsFollow, { passive: true });
+    elements.lyricsContent.addEventListener("touchstart", pauseLyricsFollow, { passive: true });
+    elements.lyricsContent.addEventListener("pointerdown", pauseLyricsFollow);
+    elements.lyricsContent.addEventListener("keydown", (event) => {
+      if (["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)) {
+        pauseLyricsFollow();
+      }
+    });
+  }
+
+  elements.lyricsFollow?.addEventListener("click", resumeLyricsFollow);
+
   elements.wrappedRangeButtons.forEach((button) => {
     button.addEventListener("click", () => {
       const nextRange = button.dataset.range || "short_term";
@@ -3483,6 +4077,24 @@ function setupEventHandlers() {
       fetchWrappedReport({ force: true });
     });
   });
+
+  bindStaticTabs(
+    elements.wrappedPaneButtons,
+    [...elements.wrappedPaneButtons].map((button) => button.dataset.wrappedPane || "overview"),
+    setWrappedPane
+  );
+
+  bindStaticTabs(
+    elements.dayPaneButtons,
+    [...elements.dayPaneButtons].map((button) => button.dataset.dayPane || "overview"),
+    setDayPane
+  );
+
+  bindStaticTabs(
+    elements.playlistPaneButtons,
+    [...elements.playlistPaneButtons].map((button) => button.dataset.playlistPane || "genre"),
+    setPlaylistPane
+  );
 
   if (elements.wrappedImageShare) {
     elements.wrappedImageShare.addEventListener("click", shareWrappedImage);
@@ -3511,6 +4123,14 @@ function setupEventHandlers() {
       createPlaylist(button.dataset.playlist || "");
     });
   });
+
+  if ("ResizeObserver" in window) {
+    const persistentObserver = new ResizeObserver(syncPersistentLayout);
+    [elements.sessionBanner].filter(Boolean).forEach((element) => {
+      persistentObserver.observe(element);
+    });
+  }
+  setupPrimarySectionObserver();
 }
 
 async function init() {
@@ -3520,8 +4140,12 @@ async function init() {
   applyRoomMode();
   applyOverviewMode();
   setupEventHandlers();
+  syncPersistentLayout();
   syncAuthButtons();
   syncWrappedRangeButtons();
+  setWrappedPane(state.activeWrappedPane);
+  setDayPane(state.activeDayPane);
+  setPlaylistPane(state.activePlaylistPane);
   renderWrappedSignedOut();
   prepareVisualizerProfile("default");
   paintVisualizer(0);

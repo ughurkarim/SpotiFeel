@@ -510,7 +510,6 @@ def build_replayed_tracks(recent_items, limit=5):
     return replayed
 
 
-
 def build_wrapped_summary(time_meta, top_artists, top_tracks, top_genres, audio_profile):
     lead_artist = (top_artists[0].get("name") if top_artists else "your top artists")
     lead_track = (top_tracks[0].get("name") if top_tracks else "your top songs")
@@ -550,15 +549,8 @@ def build_wrapped_report(headers, time_range):
         app.logger.warning("Spotify top artists failed with status %s", top_artists_res.status_code)
         return {"error": "wrapped_unavailable", "message": "Spotify listening data is temporarily unavailable."}, 502
 
-    recent_res = http_get(
-        "https://api.spotify.com/v1/me/player/recently-played",
-        headers=headers,
-        params={"limit": 50},
-    )
-
     top_tracks = (safe_json(top_tracks_res) or {}).get("items", [])
     top_artists = (safe_json(top_artists_res) or {}).get("items", [])
-    recent_items = (safe_json(recent_res) or {}).get("items", []) if recent_res.status_code == 200 else []
     top_genres = build_top_genres(top_artists)
 
     track_ids = [track.get("id") for track in top_tracks if track.get("id")]
@@ -571,8 +563,6 @@ def build_wrapped_report(headers, time_range):
     discovery = build_discovery_score(top_tracks, top_genres)
     personality = build_listening_personality(top_genres, discovery, audio_profile)
     summary = build_wrapped_summary(time_meta, top_artists, top_tracks, top_genres, audio_profile)
-    replayed_tracks = build_replayed_tracks(recent_items)
-
     lead_artist = serialize_artist(top_artists[0]) if top_artists else None
     lead_track = serialize_track(top_tracks[0]) if top_tracks else None
     lead_genre = top_genres[0] if top_genres else {"name": "mixed", "count": 0}
@@ -601,7 +591,6 @@ def build_wrapped_report(headers, time_range):
         },
         "listening_personality": personality,
         "taste_summary": summary,
-        "most_replayed_tracks": replayed_tracks,
         "discovery_score": discovery,
         "share_card": {
             "headline": f"{display_name}'s {time_meta['label']} Wrapped",

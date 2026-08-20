@@ -5,7 +5,7 @@ import { buildPlaylistPayload } from "./js/playlists.js";
 import { hasRecommendationGroups } from "./js/recommendations.js";
 import { canvasBlob } from "./js/wrapped.js";
 import { normalizeGenreName } from "./js/theme.js";
-import { buildLyricLines, buildLyricTimeline, parseSyncedLyrics } from "./js/lyrics.js";
+import { buildLyricLines, findActiveLyricIndex, parseSyncedLyrics } from "./js/lyrics.js";
 
 const POLL_INTERVALS = {
   session: 60000,
@@ -20,26 +20,31 @@ const REQUEST_GAPS = {
 
 const THEME_PALETTES = {
   default: {
-    bgBase: "#0d1018",
-    bgDepth: "#090b11",
-    text: "#f8f7fb",
-    textSoft: "#e5e2ed",
-    muted: "#a9a8b8",
-    accent: "#9fd7ca",
-    accentStrong: "#f2c7db",
-    accentSoft: "rgba(159, 215, 202, 0.18)",
-    accentShadow: "rgba(159, 215, 202, 0.2)",
-    accentInk: "#11131a",
-    border: "rgba(255, 255, 255, 0.1)",
-    panel: "rgba(18, 21, 31, 0.66)",
-    panelStrong: "rgba(10, 12, 19, 0.82)",
-    panelSoft: "rgba(24, 28, 40, 0.48)",
-    blob1: "rgba(136, 213, 201, 0.52)",
-    blob2: "rgba(138, 173, 255, 0.38)",
-    blob3: "rgba(246, 174, 202, 0.34)",
-    blob4: "rgba(255, 208, 151, 0.24)",
-    youtubeBg: "#8e6358",
-    youtubeBgHover: "#a67164",
+    bgBase: "#071315",
+    bgDepth: "#040a0c",
+    text: "#f4efe6",
+    textSoft: "#d1d6d0",
+    muted: "#839893",
+    accent: "#5ee1d0",
+    accentStrong: "#665f9a",
+    accentSoft: "rgba(94, 225, 208, 0.12)",
+    accentShadow: "rgba(94, 225, 208, 0.16)",
+    accentInk: "#041312",
+    border: "rgba(177, 229, 220, 0.17)",
+    panel: "#0b1b1d",
+    panelStrong: "#040a0c",
+    panelSoft: "#102427",
+    dominant: "#176967",
+    secondary: "#665f9a",
+    highlight: "#d9fff7",
+    blob1: "rgba(23, 105, 103, 0.34)",
+    blob2: "rgba(102, 95, 154, 0.2)",
+    blob3: "rgba(94, 225, 208, 0.12)",
+    blob4: "rgba(244, 239, 230, 0.08)",
+    heroWash: "linear-gradient(180deg, rgba(4, 10, 12, 0.18), rgba(4, 10, 12, 0.84))",
+    heroGlow: "rgba(23, 105, 103, 0.2)",
+    youtubeBg: "#244b4a",
+    youtubeBgHover: "#2d5d5b",
   },
   pop: {
     bgBase: "#131019",
@@ -398,6 +403,7 @@ let heroPulseTimer = 0;
 let overviewLayoutFrame = 0;
 const imagePreloadCache = new Set();
 const dayPaletteCache = new Map();
+const dayArtworkPaletteCache = new Map();
 
 function clamp(value, min = 0, max = 1) {
   return Math.min(max, Math.max(min, value));
@@ -810,9 +816,6 @@ const DAY_CHAPTER_DEFINITIONS = [
   },
 ];
 
-const DAY_SESSION_GAP_MINUTES = 35;
-const DAY_SESSION_GAP_MS = DAY_SESSION_GAP_MINUTES * 60 * 1000;
-
 function getDayMinute(value) {
   const date = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(date.getTime())) return 0;
@@ -870,7 +873,6 @@ function buildListeningTimeline(items = [], reference = new Date()) {
     totalPlays: plays.length,
     plays,
     currentTime,
-    endMinute: Math.max(1, getDayMinute(currentTime)),
   };
 }
 
@@ -951,227 +953,387 @@ function resolveDayPalette(imageUrl, fallback) {
   return dayPaletteCache.get(imageUrl);
 }
 
-function formatDayAxisTime(minute) {
-  const date = new Date();
-  date.setHours(0, Math.max(0, Math.floor(minute)), 0, 0);
-  return date.toLocaleTimeString([], { hour: "numeric" });
-}
-
-function buildDayAxis(endMinute) {
-  const step = endMinute <= 6 * 60 ? 2 * 60 : endMinute <= 12 * 60 ? 3 * 60 : 6 * 60;
-  const labels = [{ minute: 0, label: formatDayAxisTime(0) }];
-  for (let minute = step; minute < endMinute - Math.max(30, step * 0.3); minute += step) {
-    labels.push({ minute, label: formatDayAxisTime(minute) });
+function resolveDayArtworkPalette(imageUrl) {
+  if (!imageUrl) return Promise.resolve(null);
+  if (!dayArtworkPaletteCache.has(imageUrl)) {
+    dayArtworkPaletteCache.set(imageUrl, buildArtworkPalette(imageUrl).catch(() => null));
   }
-  labels.push({ minute: endMinute, label: "Now", now: true });
-  return labels;
+  return dayArtworkPaletteCache.get(imageUrl);
 }
 
-function buildListeningSessions(plays = [], currentTime = new Date()) {
-  const currentMs = currentTime.getTime();
-  const sessions = [];
-  plays.forEach((play) => {
-    const startMs = play.playedAt.getTime();
-    const rawDuration = Number(play.track?.duration_ms) || 210000;
-    const duration = Math.min(20 * 60 * 1000, Math.max(60 * 1000, rawDuration));
-    const endMs = Math.min(currentMs, Math.max(startMs + 30000, startMs + duration));
-    const segment = { ...play, startMs, endMs };
-    const session = sessions.at(-1);
-    if (!session || startMs - session.lastPlayStartMs > DAY_SESSION_GAP_MS) {
-      sessions.push({ startMs, endMs, lastPlayStartMs: startMs, plays: [segment] });
+function getChapterMostPlayed(chapter) {
+  const counts = new Map();
+  chapter.plays.forEach((play, index) => {
+    const entry = counts.get(play.trackKey) || { count: 0, play, lastIndex: index };
+    entry.count += 1;
+    entry.play = play;
+    entry.lastIndex = index;
+    counts.set(play.trackKey, entry);
+  });
+  return [...counts.values()].sort((left, right) => right.count - left.count || right.lastIndex - left.lastIndex)[0] || null;
+}
+
+function getChapterDominantArtist(chapter) {
+  const counts = new Map();
+  chapter.plays.forEach((play, index) => {
+    const artist = getArtistLabel(play.track);
+    const entry = counts.get(artist) || { artist, count: 0, lastIndex: index };
+    entry.count += 1;
+    entry.lastIndex = index;
+    counts.set(artist, entry);
+  });
+  return [...counts.values()].sort((left, right) => right.count - left.count || right.lastIndex - left.lastIndex)[0] || null;
+}
+
+function getRepresentativeChapterPlays(chapter, limit = 3) {
+  const albums = new Map();
+  chapter.plays.forEach((play, index) => {
+    const album = play.track?.album || {};
+    const imageUrl = album.images?.[0]?.url || "";
+    const key = album.id || imageUrl || album.name || play.trackKey;
+    const entry = albums.get(key) || { count: 0, play, lastIndex: index };
+    entry.count += 1;
+    entry.play = play;
+    entry.lastIndex = index;
+    albums.set(key, entry);
+  });
+  const ranked = [...albums.values()].sort((left, right) => right.count - left.count || right.lastIndex - left.lastIndex);
+  if (ranked.length <= limit) return ranked.map((entry) => entry.play);
+  const selected = ranked.slice(0, Math.min(2, limit));
+  const selectedKeys = new Set(selected.map((entry) => entry.play.track?.album?.images?.[0]?.url || entry.play.trackKey));
+  const recentDistinct = [...albums.values()]
+    .sort((left, right) => right.lastIndex - left.lastIndex)
+    .find((entry) => !selectedKeys.has(entry.play.track?.album?.images?.[0]?.url || entry.play.trackKey));
+  if (recentDistinct && selected.length < limit) selected.push(recentDistinct);
+  return selected.slice(0, limit).map((entry) => entry.play);
+}
+
+function focusListeningChapter(chapterId) {
+  setDayPane("chapters");
+  window.requestAnimationFrame(() => {
+    const chapter = elements.dayChapters?.querySelector(`[data-chapter-id="${chapterId}"]`);
+    chapter?.focus({ preventScroll: true });
+  });
+}
+
+function applyOverviewChapterPalette(element, representativePlays) {
+  const fallback = ["#b55a3a", "#355f75", "#6d5577"];
+  Promise.all(representativePlays.map((play) => {
+    const imageUrl = play.track?.album?.images?.[0]?.url || "";
+    return resolveDayArtworkPalette(imageUrl);
+  })).then((palettes) => {
+    const primary = palettes[0];
+    const colors = [
+      primary?.dominant,
+      palettes[1]?.secondary || palettes[1]?.dominant || primary?.secondary,
+      palettes[2]?.highlight || palettes[2]?.accent || palettes[2]?.dominant || primary?.highlight || primary?.accent,
+    ];
+    colors.forEach((color, index) => {
+      element.style.setProperty(`--overview-color-${index + 1}`, color || fallback[index]);
+    });
+  });
+}
+
+function createDayOverviewChapter(chapter, currentTime) {
+  const hasListening = chapter.plays.length > 0;
+  const temporalState = getDayChapterTemporalState(chapter, getDayMinute(currentTime));
+  const element = document.createElement(hasListening ? "button" : "article");
+  const representativePlays = hasListening ? getRepresentativeChapterPlays(chapter) : [];
+  const mostPlayed = hasListening ? getChapterMostPlayed(chapter) : null;
+  const dominantArtist = hasListening ? getChapterDominantArtist(chapter) : null;
+  const statusLabel = temporalState === "current" ? "No listening yet" : temporalState === "future" ? "Later today" : "Quiet chapter";
+  const artworkMarkup = representativePlays.map((play, index) => {
+    const imageUrl = play.track?.album?.images?.[0]?.url || "";
+    return imageUrl
+      ? `<img class="day-overview-chapter__cover day-overview-chapter__cover--${index + 1}" src="${escapeHtml(imageUrl)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">`
+      : `<span class="day-overview-chapter__cover day-overview-chapter__cover--${index + 1}" aria-hidden="true"></span>`;
+  }).join("");
+  element.className = `day-overview-chapter ${hasListening ? "has-listening" : "is-empty"} is-${temporalState} art-count-${representativePlays.length}`;
+  element.dataset.overviewChapterId = chapter.id;
+  if (hasListening) {
+    element.type = "button";
+    element.setAttribute("aria-label", `Open ${chapter.label} in Listening Chapters`);
+  }
+  element.innerHTML = `
+    <header class="day-overview-chapter__header">
+      <span>${escapeHtml(temporalState === "current" ? "Now" : chapter.fixedRange)}</span>
+      <h3>${escapeHtml(chapter.label)}</h3>
+    </header>
+    <div class="day-overview-chapter__visual" aria-hidden="true">
+      <span class="day-overview-chapter__field day-overview-chapter__field--one"></span>
+      <span class="day-overview-chapter__field day-overview-chapter__field--two"></span>
+      <span class="day-overview-chapter__field day-overview-chapter__field--three"></span>
+      <div class="day-overview-chapter__art">${artworkMarkup}</div>
+    </div>
+    <div class="day-overview-chapter__facts">
+      ${hasListening
+        ? `<strong>${escapeHtml(chapter.rangeLabel)} <i>·</i> ${escapeHtml(formatCountLabel(chapter.plays.length, "play"))}</strong>
+           <span>${escapeHtml(chapter.plays.length === 1
+             ? `${mostPlayed.play.track.name} · ${getArtistLabel(mostPlayed.play.track)}`
+             : mostPlayed.count > 1
+               ? `Most played: ${mostPlayed.play.track.name} · ${mostPlayed.count}×`
+               : `Dominant artist: ${dominantArtist.artist}`)}</span>`
+        : `<strong>${escapeHtml(chapter.fixedRange)}</strong><span>${escapeHtml(statusLabel)}</span>`}
+    </div>
+  `;
+  if (hasListening) {
+    applyOverviewChapterPalette(element, representativePlays);
+    element.addEventListener("click", () => focusListeningChapter(chapter.id));
+  }
+  return element;
+}
+
+function parseDayColor(value = "") {
+  const rgbMatch = String(value).match(/rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)/i);
+  if (rgbMatch) return { r: Number(rgbMatch[1]), g: Number(rgbMatch[2]), b: Number(rgbMatch[3]) };
+  const hexMatch = String(value).trim().match(/^#([\da-f]{3}|[\da-f]{6})$/i);
+  if (!hexMatch) return null;
+  const expanded = hexMatch[1].length === 3
+    ? [...hexMatch[1]].map((part) => `${part}${part}`).join("")
+    : hexMatch[1];
+  return {
+    r: Number.parseInt(expanded.slice(0, 2), 16),
+    g: Number.parseInt(expanded.slice(2, 4), 16),
+    b: Number.parseInt(expanded.slice(4, 6), 16),
+  };
+}
+
+function dayColorSeed(value = "") {
+  let seed = 2166136261;
+  for (const char of String(value)) {
+    seed ^= char.charCodeAt(0);
+    seed = Math.imul(seed, 16777619);
+  }
+  return seed >>> 0;
+}
+
+const DAY_PERIOD_RANGES = {
+  "morning-glow": { start: 5 * 60, end: 12 * 60, startLabel: "5 AM", endLabel: "12 PM" },
+  "midday-motion": { start: 12 * 60, end: 16 * 60, startLabel: "12 PM", endLabel: "4 PM" },
+  "golden-hour": { start: 16 * 60, end: 20 * 60, startLabel: "4 PM", endLabel: "8 PM" },
+  "after-hours": { start: 20 * 60, end: 29 * 60, startLabel: "8 PM", endLabel: "5 AM" },
+};
+
+function getDayPeriodProgress(value, chapter) {
+  const range = DAY_PERIOD_RANGES[chapter.id] || DAY_PERIOD_RANGES["morning-glow"];
+  let minute = getDayMinute(value);
+  if (chapter.id === "after-hours" && minute < 5 * 60) minute += 24 * 60;
+  return clamp((minute - range.start) / Math.max(1, range.end - range.start), 0, 1);
+}
+
+function getDayOverviewPeriodPlays(chapter, timeline) {
+  if (chapter.id !== "after-hours") return [...chapter.plays];
+  const currentMinute = getDayMinute(timeline.currentTime);
+  if (currentMinute >= 20 * 60) return chapter.plays.filter((play) => getDayMinute(play.playedAt) >= 20 * 60);
+  if (currentMinute < 5 * 60) return chapter.plays.filter((play) => getDayMinute(play.playedAt) < 5 * 60);
+  return [...chapter.plays];
+}
+
+function getDayTimelineTrackKey(play) {
+  return play.trackKey || `${play.track?.name || "track"}:${getArtistLabel(play.track)}`;
+}
+
+function buildDayTimelineEvents(chapter, plays) {
+  const positioned = plays
+    .map((play) => ({ ...play, position: getDayPeriodProgress(play.playedAt, chapter) }))
+    .sort((left, right) => left.position - right.position || left.playedAt - right.playedAt);
+  const nearbyReplayGap = 10 * 60 * 1000;
+  const nearbyReplaySpan = 16 * 60 * 1000;
+  const groups = [];
+  positioned.forEach((play) => {
+    const key = getDayTimelineTrackKey(play);
+    const playedAt = new Date(play.playedAt).getTime();
+    const nearbyGroup = [...groups].reverse().find((group) => (
+      group.key === key
+      && playedAt - group.lastPlayedAt <= nearbyReplayGap
+      && playedAt - group.firstPlayedAt <= nearbyReplaySpan
+    ));
+    if (nearbyGroup) {
+      nearbyGroup.plays.push(play);
+      nearbyGroup.lastPosition = play.position;
+      nearbyGroup.lastPlayedAt = playedAt;
+      nearbyGroup.position = nearbyGroup.plays.reduce((total, item) => total + item.position, 0) / nearbyGroup.plays.length;
       return;
     }
-    session.endMs = Math.max(session.endMs, endMs);
-    session.lastPlayStartMs = startMs;
-    session.plays.push(segment);
+    groups.push({
+      key,
+      play,
+      plays: [play],
+      position: play.position,
+      lastPosition: play.position,
+      firstPlayedAt: playedAt,
+      lastPlayedAt: playedAt,
+      lane: 0,
+    });
   });
-  return sessions;
-}
 
-function buildSessionGradient(colors = []) {
-  if (!colors.length) return "#6f695f";
-  if (colors.length === 1) return colors[0];
-  const stops = colors.map((color, index) => {
-    const position = colors.length === 1 ? 0 : (index / (colors.length - 1)) * 100;
-    return `${color} ${position.toFixed(1)}%`;
-  });
-  return `linear-gradient(90deg, ${stops.join(", ")})`;
-}
-
-function createDayRibbon(timeline) {
-  const fallbackColors = ["#ff6a2a", "#28b8d8", "#7868e6", "#f04f78", "#e3bc36", "#35a66f"];
-  const ribbon = document.createElement("div");
-  const axis = buildDayAxis(timeline.endMinute);
-  const sessions = buildListeningSessions(timeline.plays, timeline.currentTime);
-  const dayStart = new Date(timeline.currentTime);
-  dayStart.setHours(0, 0, 0, 0);
-  const axisMarkup = axis.map((item, index) => {
-    const position = clamp(item.minute / timeline.endMinute, 0, 1) * 100;
-    const edge = index === 0 ? " is-start" : item.now ? " is-now" : "";
-    return `<span class="day-ribbon__tick${edge}" style="--tick-position:${position.toFixed(3)}%">${escapeHtml(item.label)}</span>`;
-  }).join("");
-  ribbon.className = "day-ribbon";
-  ribbon.innerHTML = `
-    <div class="day-ribbon__axis" aria-hidden="true">${axisMarkup}</div>
-    <div class="day-ribbon__rail" aria-label="Listening sessions from midnight to now">
-      <div class="day-ribbon__sessions"></div>
-    </div>
-  `;
-  const sessionLayer = ribbon.querySelector(".day-ribbon__sessions");
-  sessions.forEach((session, sessionIndex) => {
-    const sessionStartMinute = (session.startMs - dayStart.getTime()) / 60000;
-    const sessionEndMinute = (session.endMs - dayStart.getTime()) / 60000;
-    const sessionDuration = Math.max(0.5, sessionEndMinute - sessionStartMinute);
-    const sessionElement = document.createElement("button");
-    const palettePlays = getRepresentativePlays(session.plays);
-    const sessionColors = palettePlays.map((_, playIndex) => fallbackColors[(sessionIndex + playIndex) % fallbackColors.length]);
-    const representativePlay = session.plays.at(-1);
-    sessionElement.type = "button";
-    sessionElement.className = "day-ribbon__session";
-    sessionElement.style.left = `${(clamp(sessionStartMinute / timeline.endMinute, 0, 1) * 100).toFixed(3)}%`;
-    sessionElement.style.width = `${(clamp(sessionDuration / timeline.endMinute, 0, 1) * 100).toFixed(3)}%`;
-    sessionElement.setAttribute(
-      "aria-label",
-      `${formatCountLabel(session.plays.length, "play")} from ${formatClockLabel(session.startMs)} to ${formatClockLabel(session.endMs)}`
+  groups.sort((left, right) => left.position - right.position || left.firstPlayedAt - right.firstPlayedAt);
+  const laneEnds = [-1, -1];
+  const laneCounts = [0, 0];
+  let previousVisualPosition = -1;
+  groups.forEach((group, index) => {
+    const availableLanes = laneEnds
+      .map((position, lane) => ({ lane, available: group.position - position >= 0.052 }))
+      .filter((entry) => entry.available)
+      .map((entry) => entry.lane);
+    let lane = availableLanes.length === 2 ? index % 2 : availableLanes[0];
+    if (lane === undefined) lane = laneEnds.indexOf(Math.min(...laneEnds));
+    group.lane = lane;
+    const minimumVisualPosition = laneEnds[lane] + 0.047;
+    const collisionAdjustedPosition = Math.min(
+      0.975,
+      Math.max(group.position, Math.min(group.position + 0.018, minimumVisualPosition))
     );
-    sessionElement.style.background = buildSessionGradient(sessionColors);
-    sessionElement.addEventListener("click", () => playTrack(representativePlay.track, sessionElement));
-    palettePlays.forEach((play, playIndex) => {
-      const imageUrl = play.track?.album?.images?.[0]?.url || "";
-      resolveDayPalette(imageUrl, sessionColors[playIndex]).then((color) => {
-        sessionColors[playIndex] = color;
-        sessionElement.style.background = buildSessionGradient(sessionColors);
-      });
-    });
-    sessionLayer.appendChild(sessionElement);
+    group.visualPosition = Math.min(
+      0.975,
+      Math.max(collisionAdjustedPosition, Math.min(group.position + 0.018, previousVisualPosition + 0.001))
+    );
+    group.verticalNudge = ((laneCounts[lane] % 3) - 1) * 3;
+    laneCounts[lane] += 1;
+    laneEnds[lane] = group.visualPosition;
+    previousVisualPosition = group.visualPosition;
   });
-  return ribbon;
+  return groups;
 }
 
-function getFeaturedChapterNote(chapter) {
+function getDayPeriodHighlights(chapter, plays) {
+  const positioned = plays
+    .map((play) => ({ ...play, position: getDayPeriodProgress(play.playedAt, chapter) }))
+    .sort((left, right) => left.position - right.position || left.playedAt - right.playedAt);
+  if (!positioned.length) return null;
   const counts = new Map();
-  chapter.plays.forEach((play) => counts.set(play.trackKey, (counts.get(play.trackKey) || 0) + 1));
-  const mostRepeated = [...counts.entries()].sort((left, right) => right[1] - left[1])[0];
-  const repeatedPlay = chapter.plays.find((play) => play.trackKey === mostRepeated?.[0]);
-  if (mostRepeated?.[1] > 1 && repeatedPlay) {
-    return `You returned to ${repeatedPlay.track.name} ${mostRepeated[1]} times across this chapter.`;
-  }
-  const artistCount = new Set(chapter.plays.map((play) => getArtistLabel(play.track))).size;
-  if (chapter.plays.length === 1) {
-    return `${chapter.plays[0].track.name} is the single color held here so far.`;
-  }
-  return `${formatCountLabel(chapter.plays.length, "play")} across ${formatCountLabel(artistCount, "artist")} shaped this part of the day.`;
-}
-
-function getRepresentativePlays(plays = [], limit = 3) {
-  const unique = [];
-  const seen = new Set();
-  plays.forEach((play) => {
-    const imageUrl = play.track?.album?.images?.[0]?.url || play.trackKey;
-    if (!seen.has(imageUrl)) {
-      seen.add(imageUrl);
-      unique.push(play);
-    }
+  positioned.forEach((play, index) => {
+    const key = getDayTimelineTrackKey(play);
+    const entry = counts.get(key) || { play, count: 0, firstIndex: index };
+    entry.count += 1;
+    counts.set(key, entry);
   });
-  const source = unique.length >= Math.min(limit, plays.length) ? unique : plays;
-  if (source.length <= limit) return source;
-  return [source[0], source[Math.floor((source.length - 1) / 2)], source.at(-1)];
+  const mostReplayed = [...counts.values()].sort((left, right) => right.count - left.count || left.firstIndex - right.firstIndex)[0];
+  return {
+    first: positioned[0],
+    mostReplayed,
+    latest: positioned.at(-1),
+  };
 }
 
-function createFeaturedChapter(timeline) {
-  const populated = timeline.chapters.filter((chapter) => chapter.plays.length);
-  if (!populated.length) return null;
-  const chapter = [...populated].sort((left, right) => {
-    if (right.plays.length !== left.plays.length) return right.plays.length - left.plays.length;
-    return right.lastPlayedAt - left.lastPlayedAt;
-  })[0];
-  const feature = document.createElement("article");
-  const coverPlays = getRepresentativePlays(chapter.plays);
-  feature.className = "day-feature";
-  feature.innerHTML = `
-    <div class="day-feature__copy">
-      <p>Featured Chapter</p>
-      <h3>${escapeHtml(chapter.label)}</h3>
-      <strong>${escapeHtml(chapter.rangeLabel)}</strong>
-      <span>${escapeHtml(getFeaturedChapterNote(chapter))}</span>
-    </div>
-    <div class="day-feature__covers" aria-label="Representative records from ${escapeHtml(chapter.label)}"></div>
+function getDayTimelineArtwork(play) {
+  return play?.track?.album?.images?.[0]?.url || "";
+}
+
+function createDayHighlightMarkup(label, play, detail, featured = false) {
+  const imageUrl = getDayTimelineArtwork(play);
+  const title = play?.track?.name || "Unknown track";
+  const artist = getArtistLabel(play?.track);
+  return `
+    <article class="day-period-highlight${featured ? " is-featured" : ""}${imageUrl ? "" : " has-no-art"}">
+      <p>${escapeHtml(label)}</p>
+      ${imageUrl ? `<img src="${escapeHtml(imageUrl)}" alt="${escapeHtml(`${title} album artwork`)}" loading="lazy" decoding="async" referrerpolicy="no-referrer">` : ""}
+      <h4>${escapeHtml(title)}</h4>
+      <span>${escapeHtml(artist)}</span>
+      <small>${escapeHtml(detail)}</small>
+    </article>
   `;
-  const covers = feature.querySelector(".day-feature__covers");
-  coverPlays.forEach((play, index) => {
-    const cover = document.createElement("button");
-    const imageUrl = play.track?.album?.images?.[0]?.url || "";
-    cover.type = "button";
-    cover.className = "day-feature__cover";
-    cover.setAttribute("aria-label", `Play ${play.track.name} by ${getArtistLabel(play.track)}`);
-    cover.innerHTML = imageUrl
-      ? `<img src="${escapeHtml(imageUrl)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">`
-      : '<span aria-hidden="true"></span>';
-    cover.addEventListener("click", () => playTrack(play.track, cover));
-    covers.appendChild(cover);
-    resolveDayPalette(imageUrl, ["#ff6a2a", "#28b8d8", "#7868e6"][index % 3]).then((color) => {
-      feature.style.setProperty(`--feature-color-${index + 1}`, color);
-    });
-  });
-  return feature;
 }
 
-function createDayHighlight({ label, play = null, title = "", detail = "", count = 0 }) {
-  const element = document.createElement(play ? "button" : "article");
-  const imageUrl = play?.track?.album?.images?.[0]?.url || "";
-  if (play) element.type = "button";
-  element.className = "day-highlight";
-  element.innerHTML = `
-    <span class="day-highlight__label">${escapeHtml(label)}</span>
-    <span class="day-highlight__body">
-      ${imageUrl
-        ? `<img src="${escapeHtml(imageUrl)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">`
-        : '<span class="day-highlight__swatch" aria-hidden="true"></span>'}
-      <span class="day-highlight__copy">
-        <strong>${escapeHtml(play?.track?.name || title)}</strong>
-        <span>${escapeHtml(play ? getArtistLabel(play.track) : detail)}</span>
-        ${count > 1 ? `<em>${escapeHtml(`${count} plays`)}</em>` : ""}
-      </span>
+function createDayTimelineEvent(group) {
+  const event = document.createElement("article");
+  const play = group.play;
+  const imageUrl = getDayTimelineArtwork(play);
+  const title = play.track?.name || "Unknown track";
+  const artist = getArtistLabel(play.track);
+  const timeLabel = formatClockLabel(play.playedAt);
+  event.className = `day-timeline-event ${group.lane === 0 ? "is-lane-upper" : "is-lane-lower"}${imageUrl ? "" : " has-no-art"}`;
+  event.tabIndex = 0;
+  event.style.setProperty("--day-event-position", `${(clamp(group.visualPosition ?? group.position, 0.025, 0.975) * 100).toFixed(3)}%`);
+  event.style.setProperty("--day-event-nudge", `${group.verticalNudge || 0}px`);
+  event.style.setProperty("--day-event-lane", group.lane);
+  event.setAttribute("aria-label", `${timeLabel}, ${title} by ${artist}${group.plays.length > 1 ? `, ${group.plays.length} plays` : ""}`);
+  event.innerHTML = `
+    ${imageUrl ? `<img src="${escapeHtml(imageUrl)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">` : ""}
+    ${group.plays.length > 1 ? `<b>${group.plays.length}×</b>` : ""}
+    <i aria-hidden="true"></i>
+    <span class="day-timeline-event__tooltip" role="tooltip">
+      <strong>${escapeHtml(timeLabel)}</strong>
+      <em>${escapeHtml(title)}</em>
+      <small>${escapeHtml(artist)}${group.plays.length > 1 ? ` · ${group.plays.length} plays` : ""}</small>
     </span>
   `;
-  if (play) element.addEventListener("click", () => playTrack(play.track, element));
-  return element;
+  return event;
+}
+
+function renderDayOverviewPeriod(overview, timeline, chapter) {
+  const panel = overview.querySelector(".day-period-panel");
+  if (!panel) return;
+  const plays = getDayOverviewPeriodPlays(chapter, timeline);
+  const range = DAY_PERIOD_RANGES[chapter.id];
+  overview.querySelectorAll(".day-period-selector").forEach((button) => {
+    const active = button.dataset.dayPeriod === chapter.id;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-selected", String(active));
+    button.tabIndex = active ? 0 : -1;
+  });
+  panel.setAttribute("aria-labelledby", `day-period-${chapter.id}`);
+  panel.innerHTML = "";
+
+  if (!plays.length) {
+    panel.innerHTML = `<div class="day-period-empty"><strong>Nothing played during ${escapeHtml(chapter.label)} yet.</strong><span>${escapeHtml(chapter.fixedRange)}</span></div>`;
+    return;
+  }
+
+  const timelineElement = document.createElement("section");
+  const events = buildDayTimelineEvents(chapter, plays);
+  const isCurrent = getListeningChapter(timeline.currentTime).id === chapter.id;
+  const nowPosition = getDayPeriodProgress(timeline.currentTime, chapter);
+  timelineElement.className = "day-period-timeline";
+  timelineElement.setAttribute("aria-label", `${chapter.label} listening timeline, ${range.startLabel} to ${range.endLabel}`);
+  timelineElement.innerHTML = `
+    <div class="day-period-timeline__events"></div>
+    <div class="day-period-timeline__rail" aria-hidden="true">
+      <span>${escapeHtml(range.startLabel)}</span>
+      <i></i>
+      <span>${escapeHtml(range.endLabel)}</span>
+      ${isCurrent ? `<b style="--day-period-now:${(clamp(nowPosition, 0, 1) * 100).toFixed(3)}%">Now</b>` : ""}
+    </div>
+  `;
+  applyOverviewChapterPalette(timelineElement, getRepresentativeChapterPlays({ ...chapter, plays }));
+  const eventLayer = timelineElement.querySelector(".day-period-timeline__events");
+  events.forEach((event) => eventLayer.appendChild(createDayTimelineEvent(event)));
+
+  const highlights = getDayPeriodHighlights(chapter, plays);
+  const highlightGrid = document.createElement("section");
+  highlightGrid.className = "day-period-highlights";
+  highlightGrid.setAttribute("aria-label", `${chapter.label} highlights`);
+  highlightGrid.innerHTML = [
+    createDayHighlightMarkup("First Song", highlights.first, formatClockLabel(highlights.first.playedAt)),
+    createDayHighlightMarkup(
+      "Most Replayed",
+      highlights.mostReplayed.play,
+      `${highlights.mostReplayed.count} ${highlights.mostReplayed.count === 1 ? "play" : "plays"}`,
+      true
+    ),
+    createDayHighlightMarkup("Latest Song", highlights.latest, formatClockLabel(highlights.latest.playedAt)),
+  ].join("");
+  panel.append(timelineElement, highlightGrid);
 }
 
 function createDayOverview(timeline) {
   const overview = document.createElement("div");
-  overview.className = "day-overview";
-  if (!timeline.plays.length) {
-    const quiet = document.createElement("div");
-    quiet.className = "day-overview__quiet";
-    quiet.innerHTML = `
-      <p>Today is still quiet.</p>
-      <strong>Your first listen will leave the first passage of color here.</strong>
-    `;
-    overview.appendChild(quiet);
-    return overview;
-  }
-  overview.appendChild(createDayRibbon(timeline));
-  const story = document.createElement("div");
-  story.className = "day-overview__story";
-  const feature = createFeaturedChapter(timeline);
-  if (feature) story.appendChild(feature);
-  const highlights = document.createElement("div");
-  highlights.className = "day-highlights";
-  const firstPlay = timeline.plays[0];
-  const latestPlay = timeline.plays.at(-1);
-  const counts = new Map();
-  timeline.plays.forEach((play) => {
-    const entry = counts.get(play.trackKey) || { count: 0, play };
-    entry.count += 1;
-    counts.set(play.trackKey, entry);
+  const currentChapterId = getListeningChapter(timeline.currentTime).id;
+  const currentChapter = timeline.chapters.find((chapter) => chapter.id === currentChapterId) || timeline.chapters[0];
+  overview.className = "day-overview day-overview--artwork-timeline";
+  overview.innerHTML = `
+    <div class="day-period-selectors" role="tablist" aria-label="Day periods">
+      ${DAY_CHAPTER_DEFINITIONS.map((chapter) => `<button id="day-period-${chapter.id}" class="day-period-selector" type="button" role="tab" data-day-period="${chapter.id}" aria-controls="day-period-panel">${escapeHtml(chapter.label)}</button>`).join("")}
+    </div>
+    <div id="day-period-panel" class="day-period-panel" role="tabpanel"></div>
+  `;
+  overview.querySelectorAll(".day-period-selector").forEach((button) => {
+    button.addEventListener("click", () => {
+      const chapter = timeline.chapters.find((item) => item.id === button.dataset.dayPeriod) || currentChapter;
+      renderDayOverviewPeriod(overview, timeline, chapter);
+    });
   });
-  const mostPlayed = [...counts.values()].sort((left, right) => right.count - left.count)[0];
-  highlights.appendChild(createDayHighlight({ label: "First Track", play: firstPlay }));
-  highlights.appendChild(createDayHighlight({ label: "Most Played", play: mostPlayed.play, count: mostPlayed.count }));
-  highlights.appendChild(createDayHighlight({ label: "Latest", play: latestPlay }));
-  story.appendChild(highlights);
-  overview.appendChild(story);
+  renderDayOverviewPeriod(overview, timeline, currentChapter);
   return overview;
 }
 
@@ -1219,6 +1381,8 @@ function createListeningChapter(chapter, options = {}) {
   const isCurrent = !hasListening && temporalState === "current";
   const visibleCount = options.visibleCount || 3;
   section.className = `day-chapter ${hasListening ? "day-chapter--populated" : "day-chapter--preview"} is-${hasListening ? "populated" : temporalState}`;
+  section.dataset.chapterId = chapter.id;
+  section.tabIndex = -1;
   section.innerHTML = `
     <header class="day-chapter__header">
       <p>${escapeHtml(hasListening ? formatCountLabel(chapter.plays.length, "play") : chapter.fixedRange)}</p>
@@ -1236,18 +1400,17 @@ function createListeningChapter(chapter, options = {}) {
   });
   section.style.setProperty("--chapter-visible-count", visibleCount);
   if (chapter.plays.length > visibleCount) {
-    const hiddenCount = chapter.plays.length - visibleCount;
     const toggle = document.createElement("button");
     toggle.type = "button";
     toggle.className = "day-chapter__toggle";
     toggle.setAttribute("aria-controls", tracksId);
     toggle.setAttribute("aria-expanded", "false");
-    toggle.textContent = `+ ${hiddenCount} more`;
+    toggle.textContent = "View More";
     toggle.addEventListener("click", () => {
       const expanded = section.classList.toggle("is-expanded");
       moments.forEach((moment, index) => { moment.hidden = !expanded && index >= visibleCount; });
       toggle.setAttribute("aria-expanded", String(expanded));
-      toggle.textContent = expanded ? "Close" : `+ ${hiddenCount} more`;
+      toggle.textContent = expanded ? "View Less" : "View More";
     });
     section.appendChild(toggle);
   }
@@ -1704,9 +1867,13 @@ function setHeroMeta({ item = null, context = "" } = {}) {
 
   if (!item) {
     elements.heroTitle.classList.remove("hero-title--medium", "hero-title--long");
-    elements.heroTitle.textContent = "Connect Spotify";
-    elements.heroArtist.textContent = "Log in and start a track to make the page react to your music.";
-    elements.heroContext.textContent = context || "Album art, motion, and lyrics respond to what's playing.";
+    elements.heroTitle.textContent = state.authenticated ? "Nothing playing" : "Connect Spotify";
+    elements.heroArtist.textContent = state.authenticated
+      ? "Start something on Spotify."
+      : "Bring your listening into a more vivid, personal view.";
+    elements.heroContext.textContent = context || (state.authenticated
+      ? "SpotiFeel will pick up the next track automatically."
+      : "Album art, motion, and lyrics respond when the music begins.");
     elements.heroContext.classList.remove("hidden");
     updateMoodChip();
     updateGenreChip();
@@ -1962,6 +2129,14 @@ function showBanner(message, actionLabel = "", actionHref = "/login") {
 function syncAuthButtons() {
   if (elements.loginBtn) elements.loginBtn.classList.toggle("hidden", state.authenticated);
   if (elements.logoutBtn) elements.logoutBtn.classList.toggle("hidden", !state.authenticated);
+  syncExperienceState();
+}
+
+function syncExperienceState() {
+  const disconnected = !state.authenticated;
+  const connectedIdle = state.authenticated && !state.currentItem;
+  document.body.classList.toggle("experience-disconnected", disconnected);
+  document.body.classList.toggle("experience-connected-idle", connectedIdle);
 }
 
 function setPlaylistStatus(message, tone = "muted") {
@@ -2001,12 +2176,31 @@ function shouldBlankTrackPanelInOverview() {
   return state.overviewMode && window.innerWidth >= 960;
 }
 
-function renderTrackPanelEmptyState(title, detail) {
+function renderTrackPanelIdleState(title, detail) {
+  if (!elements.track) return;
+  elements.track.innerHTML = `
+    <div class="track-idle-state">
+      <span class="track-idle-state__rule" aria-hidden="true"></span>
+      <div class="track-idle-state__copy">
+        <p class="track-idle-state__eyebrow">Playback idle</p>
+        <strong>${escapeHtml(title)}</strong>
+        <p>${escapeHtml(detail)}</p>
+      </div>
+    </div>
+  `;
+}
+
+function renderTrackPanelEmptyState(title, detail, { variant = "standard" } = {}) {
   if (!elements.track) return;
   elements.track.dataset.emptyTitle = title;
   elements.track.dataset.emptyDetail = detail;
+  elements.track.dataset.emptyVariant = variant;
   if (shouldBlankTrackPanelInOverview()) {
     elements.track.innerHTML = "";
+    return;
+  }
+  if (variant === "idle") {
+    renderTrackPanelIdleState(title, detail);
     return;
   }
   renderEmptyState(elements.track, title, detail);
@@ -2016,14 +2210,19 @@ function clearTrackPanelEmptyState() {
   if (!elements.track) return;
   delete elements.track.dataset.emptyTitle;
   delete elements.track.dataset.emptyDetail;
+  delete elements.track.dataset.emptyVariant;
 }
 
 function syncTrackPanelEmptyState() {
   if (!elements.track) return;
-  const { emptyTitle, emptyDetail } = elements.track.dataset;
+  const { emptyTitle, emptyDetail, emptyVariant } = elements.track.dataset;
   if (!emptyTitle || !emptyDetail) return;
   if (shouldBlankTrackPanelInOverview()) {
     elements.track.innerHTML = "";
+    return;
+  }
+  if (emptyVariant === "idle") {
+    renderTrackPanelIdleState(emptyTitle, emptyDetail);
     return;
   }
   renderEmptyState(elements.track, emptyTitle, emptyDetail);
@@ -2077,7 +2276,7 @@ function setLyricsTiming(timing = "plain", source = "") {
   if (!elements.lyricsTiming) return;
   const labels = {
     synced: "Line synced",
-    estimated: "Estimated timing",
+    unsynced: "Unsynced lyrics",
     plain: "Plain lyrics",
   };
   elements.lyricsTiming.textContent = labels[timing] || labels.plain;
@@ -2146,11 +2345,7 @@ function syncLyricsPlayback(currentMs = 0, { forceFollow = false } = {}) {
     return;
   }
 
-  let targetIndex = -1;
-  for (let index = 0; index < state.lyricTimeline.length; index += 1) {
-    if (state.lyricTimeline[index].start > currentMs + 24) break;
-    targetIndex = index;
-  }
+  const targetIndex = findActiveLyricIndex(state.lyricTimeline, currentMs);
 
   if (targetIndex !== state.activeLyricLineIndex) {
     state.activeLyricLineIndex = targetIndex;
@@ -2186,7 +2381,6 @@ function renderLyricsView({
   subtitle = "Start a track in Spotify and switch to this view to read along.",
   content = "Lyrics will appear here when available.",
   searchUrls = null,
-  interactive = false,
   syncedLyrics = "",
   timing = "plain",
   source = "",
@@ -2201,13 +2395,13 @@ function renderLyricsView({
   setLyricsFollow(true);
   if (elements.lyricsContent) {
     const trackDuration = durationMs || state.currentItem?.duration_ms || 0;
-    const syncedTimeline = interactive ? parseSyncedLyrics(syncedLyrics, trackDuration) : [];
+    const syncedTimeline = parseSyncedLyrics(syncedLyrics, trackDuration);
     const lyricLines = buildLyricLines(content);
     elements.lyricsContent.classList.remove("lyrics-content--loading");
     elements.lyricsContent.innerHTML = "";
     elements.lyricsContent.scrollTop = 0;
 
-    if (syncedTimeline.length >= 2) {
+    if (syncedTimeline.length) {
       elements.lyricsContent.classList.add("lyrics-content--lines");
       const fragment = document.createDocumentFragment();
       syncedTimeline.forEach((line) => {
@@ -2222,8 +2416,8 @@ function renderLyricsView({
       state.lyricTimeline = syncedTimeline;
       state.lyricsInteractive = state.lyricTimeline.length === state.lyricLineElements.length;
       setLyricsTiming("synced", source);
-    } else if (interactive && trackDuration > 0 && lyricLines.filter((line) => line.type === "line").length >= 4) {
-      elements.lyricsContent.classList.add("lyrics-content--lines");
+    } else {
+      elements.lyricsContent.classList.remove("lyrics-content--lines");
       const fragment = document.createDocumentFragment();
       lyricLines.forEach((line) => {
         if (line.type === "spacer") {
@@ -2233,20 +2427,13 @@ function renderLyricsView({
           return;
         }
         const paragraph = document.createElement("p");
-        paragraph.className = "lyric-line";
         paragraph.textContent = line.text;
-        state.currentLyricsLines.push(line.text);
-        state.lyricLineElements.push(paragraph);
         fragment.appendChild(paragraph);
       });
-      elements.lyricsContent.appendChild(fragment);
-      state.lyricTimeline = buildLyricTimeline(lyricLines, trackDuration);
-      state.lyricsInteractive = state.lyricTimeline.length === state.lyricLineElements.length;
-      setLyricsTiming("estimated", source);
-    } else {
-      elements.lyricsContent.classList.remove("lyrics-content--lines");
-      elements.lyricsContent.textContent = content;
-      if (interactive) setLyricsTiming(timing === "synced" ? "plain" : timing, source);
+      if (lyricLines.length) elements.lyricsContent.appendChild(fragment);
+      else elements.lyricsContent.textContent = content;
+      const fallbackTiming = timing === "synced" ? "unsynced" : timing;
+      if (source || fallbackTiming !== "plain") setLyricsTiming(fallbackTiming, source);
       else elements.lyricsTiming?.classList.add("hidden");
     }
   }
@@ -2278,10 +2465,14 @@ function resetProgress() {
 function updateTrackCard(item) {
   if (!elements.track) return;
   document.body.classList.toggle("has-current-track", !!item);
+  syncExperienceState();
   if (!item) {
     renderTrackPanelEmptyState(
-      "Nothing is playing right now.",
-      "Start a song in Spotify and this panel will update automatically."
+      state.authenticated ? "Nothing playing." : "Connect Spotify and start playing music.",
+      state.authenticated
+        ? "Start something on Spotify and this space will come alive."
+        : "Start playback to bring this view to life.",
+      { variant: "idle" }
     );
     return;
   }
@@ -2356,7 +2547,15 @@ function flashCardActivation(card) {
   window.setTimeout(() => card.classList.remove("is-activating"), 540);
 }
 
-function createCard({ track, detail = "", href = "", onPlay = null, badge = "" }) {
+function createCard({
+  track,
+  detail = "",
+  href = "",
+  onPlay = null,
+  badge = "",
+  openOnCard = false,
+  showNowPlaying = true,
+}) {
   const imageUrl = track?.album?.images?.[0]?.url || "";
   const title = track?.name || "Unknown track";
   const subtitle = getArtistLabel(track);
@@ -2432,7 +2631,7 @@ function createCard({ track, detail = "", href = "", onPlay = null, badge = "" }
     </span>
   `;
 
-  if (href) {
+  if (href && !openOnCard) {
     const link = document.createElement("a");
     link.className = "card-overlay-link";
     link.href = href;
@@ -2446,7 +2645,7 @@ function createCard({ track, detail = "", href = "", onPlay = null, badge = "" }
     card.appendChild(link);
   }
 
-  if (onPlay && track?.uri) {
+  if (onPlay && track?.uri && !openOnCard) {
     card.tabIndex = 0;
     card.setAttribute("role", "button");
     card.setAttribute("aria-label", `Play ${title} by ${subtitle}`);
@@ -2462,7 +2661,16 @@ function createCard({ track, detail = "", href = "", onPlay = null, badge = "" }
   if (badgeRow) card.appendChild(badgeRow);
   card.append(titleRow, subtitleRow);
   if (detailRow) card.appendChild(detailRow);
-  card.appendChild(nowPlayingRow);
+  if (showNowPlaying) card.appendChild(nowPlayingRow);
+  if (href && openOnCard) {
+    const cardLink = document.createElement("a");
+    cardLink.className = "card-hit-link";
+    cardLink.href = href;
+    cardLink.target = "_blank";
+    cardLink.rel = "noreferrer";
+    cardLink.setAttribute("aria-label", `Open ${title} by ${subtitle} in Spotify`);
+    card.appendChild(cardLink);
+  }
   return card;
 }
 
@@ -2477,6 +2685,8 @@ function createTrackRow(tracks = [], options = {}) {
       badge: typeof options.badge === "function" ? options.badge(track, index) : options.badge || "",
       href: track.external_urls?.spotify || "",
       onPlay: playTrack,
+      openOnCard: !!options.openOnCard,
+      showNowPlaying: options.showNowPlaying !== false,
     });
     if (typeof options.decorate === "function") options.decorate(card, track, index);
     row.appendChild(card);
@@ -2493,7 +2703,7 @@ function renderFeelingHistory(items = []) {
   const chapters = document.createElement("div");
   const populatedChapters = timeline.chapters.filter((chapter) => chapter.plays.length);
   const previewChapters = timeline.chapters.filter((chapter) => !chapter.plays.length);
-  const visibleCount = populatedChapters.length <= 1 ? 5 : populatedChapters.length === 2 ? 4 : 3;
+  const visibleCount = populatedChapters.length <= 2 ? 4 : 3;
   const stories = document.createElement("div");
   const previews = document.createElement("div");
   chapters.className = "day-chapters";
@@ -2540,6 +2750,25 @@ function renderDayLoading() {
   }
 }
 
+function mergeTodayRecentItems(items = [], reference = new Date()) {
+  const { start, end } = getTodayBounds(reference);
+  const dayKey = start.toISOString();
+  if (state.recentDayKey !== dayKey) {
+    state.recentDayKey = dayKey;
+    state.todayRecentItems = [];
+  }
+
+  const merged = new Map();
+  [...state.todayRecentItems, ...items].forEach((item) => {
+    const playedAt = item?.played_at ? new Date(item.played_at) : null;
+    if (!item?.track || !playedAt || Number.isNaN(playedAt.getTime()) || playedAt < start || playedAt >= end) return;
+    const key = `${item.played_at}:${getTrackKey(item.track) || item.track?.id || item.track?.name || "track"}`;
+    merged.set(key, item);
+  });
+  state.todayRecentItems = [...merged.values()].sort((left, right) => new Date(right.played_at) - new Date(left.played_at));
+  return state.todayRecentItems;
+}
+
 function renderRecommendationGroups(groups = [], sourceTrack = "") {
   if (!elements.recList) return;
   elements.recList.innerHTML = "";
@@ -2571,6 +2800,8 @@ function renderRecommendationGroups(groups = [], sourceTrack = "") {
     section.appendChild(createTrackRow(tracks, {
       rowClass: "recommendation-row",
       badge: (track) => track?.spotifeel_reason_short || "close match",
+      openOnCard: true,
+      showNowPlaying: false,
     }));
     renderedGroups.push({ group, section, sourceIndex });
   });
@@ -2765,10 +2996,19 @@ function setWrappedBusy(isBusy) {
   });
 }
 
+function setWrappedShareAvailable(available) {
+  if (!elements.wrappedImageShare) return;
+  elements.wrappedImageShare.disabled = !available;
+  elements.wrappedImageShare.setAttribute("aria-disabled", String(!available));
+}
+
 function renderWrappedLoading() {
   setWrappedBusy(true);
+  setWrappedShareAvailable(false);
   setWrappedStatus("Building your Wrapped Anytime report...");
+  elements.wrappedSection?.classList.remove("has-empty-report");
   if (elements.wrappedShareCard) {
+    elements.wrappedShareCard.classList.remove("is-empty-state");
     elements.wrappedShareCard.classList.add("is-loading");
     elements.wrappedShareCard.innerHTML = `
       <div class="wrapped-story-copy">
@@ -2782,7 +3022,7 @@ function renderWrappedLoading() {
     `;
   }
   if (elements.wrappedMoodGrid) {
-    elements.wrappedMoodGrid.innerHTML = Array.from({ length: 4 }, () => '<span class="wrapped-metric-skeleton" aria-hidden="true"></span>').join("");
+    elements.wrappedMoodGrid.innerHTML = Array.from({ length: 6 }, () => '<span class="wrapped-metric-skeleton" aria-hidden="true"></span>').join("");
   }
   [elements.wrappedTopArtists, elements.wrappedTopGenres, elements.wrappedReplayedTracks].forEach((container) => {
     if (!container) return;
@@ -2796,45 +3036,84 @@ function renderWrappedLoading() {
 }
 
 function renderWrappedSignedOut() {
+  const authenticated = state.authenticated;
   state.wrappedReport = null;
   setWrappedBusy(false);
+  setWrappedShareAvailable(false);
   syncWrappedRangeButtons();
-  setWrappedStatus("Connect Spotify to generate your report.");
+  setWrappedStatus("");
+  elements.wrappedSection?.classList.add("has-empty-report");
   if (elements.wrappedShareCard) {
-    elements.wrappedShareCard.classList.remove("is-loading");
+    elements.wrappedShareCard.classList.remove("is-loading", "has-long-personality");
+    elements.wrappedShareCard.classList.add("is-empty-state");
     elements.wrappedShareCard.innerHTML = `
       <div class="wrapped-story-copy">
         <p class="wrapped-story-period">${escapeHtml(getWrappedPeriod().story)}</p>
-        <p class="wrapped-story-eyebrow">Listening personality</p>
-        <h3>Connect Spotify</h3>
-        <p class="wrapped-story-detail">Your listening personality appears here after login.</p>
-        <p class="wrapped-story-summary">Generate a personal report from your Spotify listening.</p>
+        <p class="wrapped-story-eyebrow">${authenticated ? "Listening profile" : "Listening personality"}</p>
+        <h3>${authenticated ? "Nothing to report yet" : "Connect Spotify"}</h3>
+        <p class="wrapped-story-detail">${authenticated
+          ? "Keep listening on Spotify. Your report will take shape when listening history becomes available."
+          : "Your listening personality appears here after login."}</p>
       </div>
-      <div class="wrapped-story-placeholder" aria-hidden="true"></div>
     `;
   }
   if (elements.wrappedMoodGrid) elements.wrappedMoodGrid.innerHTML = "";
-  renderEmptyState(elements.wrappedTopArtists, "No artists yet.", "Connect Spotify to load your top artists.");
-  renderEmptyState(elements.wrappedTopTracks, "No songs yet.", "Connect Spotify to load your top songs.");
-  renderEmptyState(elements.wrappedTopGenres, "No genres yet.", "Connect Spotify to load your genre mix.");
-  renderEmptyState(elements.wrappedReplayedTracks, "No replay loops yet.", "Recent repeat plays will appear here.");
+  renderEmptyState(
+    elements.wrappedTopArtists,
+    "No artists yet.",
+    authenticated ? "Your top artists will appear as your listening history develops." : "Connect Spotify to load your top artists."
+  );
+  renderEmptyState(
+    elements.wrappedTopTracks,
+    "No songs yet.",
+    authenticated ? "Your top songs will appear as your listening history develops." : "Connect Spotify to load your top songs."
+  );
+  renderEmptyState(
+    elements.wrappedTopGenres,
+    "No genres yet.",
+    authenticated ? "Your genre mix will appear as Spotify learns your listening." : "Connect Spotify to load your genre mix."
+  );
+  renderEmptyState(
+    elements.wrappedReplayedTracks,
+    "No top tracks yet.",
+    authenticated ? "Your selected-range Top Tracks will appear as Spotify learns your listening." : "Connect Spotify to load your Top Tracks."
+  );
 }
 
-function renderWrappedMood(dna = []) {
+function renderWrappedMood(dna = [], { topTrack = null, topGenre = null } = {}) {
   if (!elements.wrappedMoodGrid) return;
   elements.wrappedMoodGrid.innerHTML = "";
   if (!dna.length) {
     renderEmptyState(elements.wrappedMoodGrid, "Mood profile unavailable.", "Spotify did not return enough signals yet.");
     return;
   }
-  dna.forEach((item) => {
+  elements.wrappedMoodGrid.setAttribute("aria-label", "Wrapped highlights and mood profile");
+  const metrics = [
+    { label: "Top Song", value: topTrack?.name || "Unknown", imageUrl: getTrackImageUrl(topTrack), isContext: true },
+    { label: "Top Genre", value: formatGenreLabel(topGenre?.name || "") || "Unknown", isContext: true },
+    ...dna,
+  ];
+  metrics.forEach((item) => {
     const tile = document.createElement("div");
     tile.className = "wrapped-mood-tile";
-    tile.innerHTML = `
-      <span>${escapeHtml(item.label || "")}</span>
-      <strong>${escapeHtml(item.value || "")}</strong>
-      <em>${escapeHtml(item.detail || "")}</em>
-    `;
+    if (item.isContext) tile.classList.add("wrapped-mood-tile--context");
+    if (item.imageUrl) {
+      tile.classList.add("wrapped-mood-tile--track");
+      tile.innerHTML = `
+        <img src="${escapeHtml(getWrappedDisplayArtworkUrl(item.imageUrl))}" alt="" loading="eager" decoding="async" referrerpolicy="no-referrer">
+        <span class="wrapped-mood-tile__copy">
+          <span>${escapeHtml(item.label || "")}</span>
+          <strong>${escapeHtml(item.value || "")}</strong>
+          <em>${escapeHtml(item.detail || "")}</em>
+        </span>
+      `;
+    } else {
+      tile.innerHTML = `
+        <span>${escapeHtml(item.label || "")}</span>
+        <strong>${escapeHtml(item.value || "")}</strong>
+        <em>${escapeHtml(item.detail || "")}</em>
+      `;
+    }
     elements.wrappedMoodGrid.appendChild(tile);
   });
 }
@@ -2902,28 +3181,28 @@ function renderWrappedTracks(tracks = []) {
         card.classList.add("wrapped-song-card");
         if (index === 0) card.classList.add("is-top-song");
       },
+      openOnCard: true,
+      showNowPlaying: false,
     })
   );
 }
 
-function renderWrappedReplays(replayed = []) {
+function renderWrappedPeriodTracks(tracks = []) {
   if (!elements.wrappedReplayedTracks) return;
   elements.wrappedReplayedTracks.innerHTML = "";
-  if (!replayed.length) {
-    renderEmptyState(elements.wrappedReplayedTracks, "No replay loops yet.", "Repeat plays from recently played tracks will appear here.");
+  if (!tracks.length) {
+    renderEmptyState(elements.wrappedReplayedTracks, "No top tracks yet.", "Spotify did not return Top Tracks for this range.");
     return;
   }
-  replayed.slice(0, 5).forEach((item) => {
-    const track = item.track || {};
-    const replay = createWrappedRankedItem({
+  tracks.slice(0, 5).forEach((track) => {
+    const rankedTrack = createWrappedRankedItem({
       imageUrl: getTrackImageUrl(track),
       title: track.name || "Unknown track",
       detail: getArtistLabel(track),
-      badge: `${item.play_count || 1}×`,
       href: getSpotifyUrl(track),
     });
-    replay.classList.add("wrapped-replay-item");
-    elements.wrappedReplayedTracks.appendChild(replay);
+    rankedTrack.classList.add("wrapped-replay-item");
+    elements.wrappedReplayedTracks.appendChild(rankedTrack);
   });
 }
 
@@ -2936,23 +3215,33 @@ function renderWrappedShareCard(report) {
   const trackImage = getTrackImageUrl(topTrack);
   const artistImage = getArtistImageUrl(topArtist);
   const imageUrl = artistImage || trackImage;
+  const displayImageUrl = getWrappedDisplayArtworkUrl(imageUrl);
   const personality = report?.listening_personality || card.personality || {};
   const discovery = report?.discovery_score || card.discovery_score || {};
   const discoveryScore = Math.max(0, Math.min(100, Number(discovery.score) || 0));
   const period = getWrappedPeriod();
-  elements.wrappedShareCard.classList.remove("is-loading");
+  elements.wrappedShareCard.classList.remove("is-loading", "is-empty-state");
+  elements.wrappedShareCard.classList.toggle("has-long-personality", (personality.title || "").length > 42);
   elements.wrappedShareCard.innerHTML = `
     <div class="wrapped-story-copy">
       <p class="wrapped-story-period">${escapeHtml(period.story)}</p>
       <p class="wrapped-story-eyebrow">Listening personality</p>
       <h3>${escapeHtml(personality.title || "The Taste Architect")}</h3>
       <p class="wrapped-story-detail">${escapeHtml(personality.detail || "")}</p>
-      <p class="wrapped-story-summary">${escapeHtml(card.summary || report?.taste_summary || "")}</p>
+      <section class="wrapped-discovery-story" aria-label="Discovery score: ${escapeHtml(String(discoveryScore))} percent">
+        <div class="wrapped-discovery-heading">
+          <span>Discovery</span>
+          <strong>${escapeHtml(String(discoveryScore))}%</strong>
+          <i aria-hidden="true">·</i>
+          <b>${escapeHtml(discovery.label || "Discovery Score")}</b>
+        </div>
+        <p class="wrapped-discovery-detail">${escapeHtml(discovery.detail || "")}</p>
+      </section>
     </div>
     <figure class="wrapped-featured-artist">
       ${
-        imageUrl
-          ? `<img src="${escapeHtml(imageUrl)}" alt="" loading="eager" decoding="async" referrerpolicy="no-referrer">`
+        displayImageUrl
+          ? `<img src="${escapeHtml(displayImageUrl)}" alt="${escapeHtml(`Top artist ${topArtist.name || ""}`.trim())}" loading="eager" decoding="async" fetchpriority="high" referrerpolicy="no-referrer">`
           : '<span class="wrapped-story-placeholder" aria-hidden="true"></span>'
       }
       <figcaption>
@@ -2960,29 +3249,23 @@ function renderWrappedShareCard(report) {
         <strong>${escapeHtml(topArtist.name || "Unknown")}</strong>
       </figcaption>
     </figure>
-    <section class="wrapped-discovery-story" aria-label="Discovery score: ${escapeHtml(String(discoveryScore))} percent">
-      <div class="wrapped-discovery-heading">
-        <strong>${escapeHtml(String(discoveryScore))}%</strong>
-        <span>Discovery</span>
-      </div>
-      <div class="wrapped-discovery-scale" style="--discovery-score: ${escapeHtml(String(discoveryScore))}%" aria-hidden="true"><span></span></div>
-      <p class="wrapped-discovery-label">${escapeHtml(discovery.label || "Discovery Score")}</p>
-      <p class="wrapped-discovery-detail">${escapeHtml(discovery.detail || "")}</p>
-    </section>
-    <dl class="wrapped-story-facts">
-      <div><dt>Top Song</dt><dd>${escapeHtml(topTrack.name || "Unknown")}</dd></div>
-      <div><dt>Genre</dt><dd>${escapeHtml(formatGenreLabel(topGenre.name || ""))}</dd></div>
-    </dl>
   `;
 }
 
 function renderWrappedReport(report) {
-  if (!report) {
+  const hasListeningData = [
+    report?.top_artists,
+    report?.top_tracks,
+    report?.top_genres,
+  ].some((items) => Array.isArray(items) && items.length > 0);
+  if (!report || !hasListeningData) {
     renderWrappedSignedOut();
     return;
   }
   state.wrappedReport = report;
   setWrappedBusy(false);
+  setWrappedShareAvailable(true);
+  elements.wrappedSection?.classList.remove("has-empty-report");
   syncWrappedRangeButtons();
   setWrappedStatus("");
   const allTimeButton = [...elements.wrappedRangeButtons].find((button) => button.dataset.range === "long_term");
@@ -2991,11 +3274,14 @@ function renderWrappedReport(report) {
     allTimeButton.setAttribute("aria-label", `All Time. ${report.data_note}`);
   }
   renderWrappedShareCard(report);
-  renderWrappedMood(report.mood_profile?.dna || []);
+  renderWrappedMood(report.mood_profile?.dna || [], {
+    topTrack: report.share_card?.top_track || report.top_tracks?.[0] || null,
+    topGenre: report.share_card?.top_genre || report.top_genres?.[0] || null,
+  });
   renderWrappedArtists(report.top_artists || []);
   renderWrappedTracks(report.top_tracks || []);
   renderWrappedGenres(report.top_genres || []);
-  renderWrappedReplays(report.most_replayed_tracks || []);
+  renderWrappedPeriodTracks(report.top_tracks || []);
 }
 
 async function fetchWrappedReport({ force = false } = {}) {
@@ -3039,7 +3325,20 @@ async function fetchWrappedReport({ force = false } = {}) {
 }
 
 function drawWrappedText(context, text, x, y, maxWidth, lineHeight, maxLines = 4) {
-  const words = String(text || "").split(/\s+/).filter(Boolean);
+  const words = [];
+  String(text || "").split(/\s+/).filter(Boolean).forEach((word) => {
+    if (context.measureText(word).width <= maxWidth) {
+      words.push(word);
+      return;
+    }
+    let remainder = word;
+    while (remainder) {
+      let end = remainder.length;
+      while (end > 1 && context.measureText(remainder.slice(0, end)).width > maxWidth) end -= 1;
+      words.push(remainder.slice(0, end));
+      remainder = remainder.slice(end);
+    }
+  });
   const lines = [];
   let line = "";
 
@@ -3069,6 +3368,88 @@ function drawWrappedText(context, text, x, y, maxWidth, lineHeight, maxLines = 4
   return y + visibleLines.length * lineHeight;
 }
 
+function createWrappedShareTheme(palette) {
+  const accent = parseDayColor(palette.accent) || { r: 159, g: 215, b: 202 };
+  const secondarySource = parseDayColor(palette.secondary) || accent;
+  const secondary = normalizeColorTone(mixColors(secondarySource, accent, 0.34), {
+    minLightness: 0.4,
+    maxLightness: 0.68,
+    minSaturation: 0.32,
+    maxSaturation: 0.82,
+  });
+  const secondaryHsl = rgbToHsl(secondary);
+  const secondaryInk = relativeLuminance(secondary) > 0.42
+    ? hslToRgb({ h: secondaryHsl.h, s: 0.18, l: 0.1 })
+    : hslToRgb({ h: secondaryHsl.h, s: 0.14, l: 0.96 });
+
+  return {
+    background: palette.bgDepth || "#090b11",
+    accent: palette.accent || "#9fd7ca",
+    secondary: rgbToCss(secondary),
+    accentInk: palette.accentInk || "#11131a",
+    secondaryInk: rgbToCss(secondaryInk),
+    text: palette.text || "#f8f7fb",
+    textSoft: palette.textSoft || "#e5e2ed",
+    muted: palette.muted || "#a9a8b8",
+  };
+}
+
+function createWrappedFallbackPalette(report) {
+  const card = report?.share_card || {};
+  const rangeLabel = report?.time_range?.label || getWrappedPeriod().label;
+  const identity = [
+    rangeLabel,
+    card.top_artist?.name || report?.top_artists?.[0]?.name,
+    card.top_track?.name || report?.top_tracks?.[0]?.name,
+  ].filter(Boolean).join("|");
+  const hue = dayColorSeed(identity || "SpotiFeel Wrapped") % 360;
+  return createArtworkPalette(
+    hslToRgb({ h: hue, s: 0.58, l: 0.36 }),
+    hslToRgb({ h: hue + 18, s: 0.48, l: 0.5 }),
+    hslToRgb({ h: hue - 12, s: 0.7, l: 0.62 })
+  );
+}
+
+async function getWrappedShareTheme(report) {
+  const card = report?.share_card || {};
+  const topArtist = card.top_artist || report?.top_artists?.[0] || {};
+  const topTrack = card.top_track || report?.top_tracks?.[0] || {};
+  const imageUrl = getArtistImageUrl(topArtist) || getTrackImageUrl(topTrack);
+  let palette = createWrappedFallbackPalette(report);
+
+  if (imageUrl) {
+    const paletteUrl = imageUrl.startsWith("/api/wrapped/artwork?")
+      ? imageUrl
+      : getWrappedArtworkProxyUrl(imageUrl);
+    try {
+      palette = await buildArtworkPalette(paletteUrl);
+    } catch (_error) {
+      // A period-specific tonal fallback keeps export colors cohesive if artwork cannot be sampled.
+    }
+  }
+
+  return createWrappedShareTheme(palette);
+}
+
+function getWrappedArtworkProxyUrl(imageUrl) {
+  if (!imageUrl) return "";
+  return `/api/wrapped/artwork?${new URLSearchParams({ url: imageUrl }).toString()}`;
+}
+
+function getWrappedDisplayArtworkUrl(imageUrl) {
+  if (!imageUrl) return "";
+  try {
+    const url = new URL(imageUrl, window.location.href);
+    const host = url.hostname.toLowerCase();
+    if (url.protocol === "https:" && (host === "scdn.co" || host.endsWith(".scdn.co") || host === "spotifycdn.com" || host.endsWith(".spotifycdn.com"))) {
+      return getWrappedArtworkProxyUrl(imageUrl);
+    }
+  } catch (_error) {
+    return imageUrl;
+  }
+  return imageUrl;
+}
+
 function loadWrappedCanvasImage(imageUrl) {
   return new Promise((resolve) => {
     if (!imageUrl) {
@@ -3076,11 +3457,10 @@ function loadWrappedCanvasImage(imageUrl) {
       return;
     }
     const image = new Image();
-    image.crossOrigin = "anonymous";
     image.referrerPolicy = "no-referrer";
     image.onload = () => resolve(image);
     image.onerror = () => resolve(null);
-    image.src = imageUrl;
+    image.src = getWrappedArtworkProxyUrl(imageUrl);
   });
 }
 
@@ -3105,7 +3485,238 @@ function drawWrappedCoverImage(context, image, x, y, width, height) {
   context.drawImage(image, sourceX, sourceY, sourceWidth, sourceHeight, x, y, width, height);
 }
 
-async function buildWrappedImageCanvas(report) {
+function drawWrappedArtwork(context, image, x, y, width, height, theme, fallbackLabel = "") {
+  if (image) {
+    drawWrappedCoverImage(context, image, x, y, width, height);
+    return;
+  }
+  context.fillStyle = "#20232b";
+  context.fillRect(x, y, width, height);
+  context.fillStyle = theme.secondary;
+  context.font = `500 ${Math.round(Math.min(width, height) * .34)}px 'Bodoni Moda', Georgia, serif`;
+  context.textAlign = "center";
+  context.fillText((fallbackLabel || "S").slice(0, 1).toUpperCase(), x + width / 2, y + height * .62);
+  context.textAlign = "left";
+}
+
+function drawWrappedShareHeader(context, theme, rangeLabel, viewLabel) {
+  context.fillStyle = theme.accent;
+  context.fillRect(0, 0, 1080, 12);
+  context.fillRect(70, 92, 50, 3);
+  context.fillStyle = theme.text;
+  context.font = "700 20px 'DM Sans', Arial, sans-serif";
+  context.fillText("SPOTIFEEL / WRAPPED ANYTIME", 70, 66);
+  context.fillStyle = theme.accent;
+  context.font = "700 15px 'DM Sans', Arial, sans-serif";
+  context.fillText(String(viewLabel || "Overview").toUpperCase(), 140, 98);
+  context.textAlign = "right";
+  context.fillStyle = theme.textSoft;
+  context.fillText(String(rangeLabel || "").toUpperCase(), 1010, 66);
+  context.textAlign = "left";
+}
+
+function drawWrappedShareFooter(context, theme) {
+  context.strokeStyle = "rgba(255, 255, 255, .16)";
+  context.lineWidth = 2;
+  context.beginPath();
+  context.moveTo(70, 1270);
+  context.lineTo(1010, 1270);
+  context.stroke();
+  context.fillStyle = theme.muted;
+  context.font = "600 16px 'DM Sans', Arial, sans-serif";
+  context.fillText("YOUR MUSIC, SEEN DIFFERENTLY", 70, 1306);
+  context.textAlign = "right";
+  context.fillText("SPOTIFEEL", 1010, 1302);
+  context.textAlign = "left";
+}
+
+async function drawWrappedOverviewShare(context, report, theme) {
+  const card = report?.share_card || {};
+  const topTrack = card.top_track || {};
+  const topArtist = card.top_artist || {};
+  const topGenre = card.top_genre || {};
+  const discovery = report?.discovery_score || card.discovery_score || {};
+  const personality = report?.listening_personality || card.personality || {};
+  const artistImage = await loadWrappedCanvasImage(getArtistImageUrl(topArtist) || getTrackImageUrl(topTrack));
+
+  context.fillStyle = theme.accent;
+  context.font = "700 16px 'DM Sans', Arial, sans-serif";
+  context.fillText("LISTENING PERSONALITY", 70, 164);
+  context.fillStyle = theme.text;
+  context.font = "500 76px 'Bodoni Moda', Georgia, serif";
+  const titleEnd = drawWrappedText(context, personality.title || "The Taste Architect", 70, 242, 940, 76, 2);
+  context.fillStyle = theme.textSoft;
+  context.font = "400 22px 'DM Sans', Arial, sans-serif";
+  drawWrappedText(context, personality.detail || "", 72, titleEnd + 22, 880, 30, 2);
+
+  drawWrappedArtwork(context, artistImage, 70, 470, 594, 610, theme, topArtist.name);
+  context.strokeStyle = theme.accent;
+  context.lineWidth = 3;
+  context.strokeRect(70, 470, 594, 610);
+  context.fillStyle = "rgba(7, 9, 14, .9)";
+  context.fillRect(70, 974, 594, 106);
+  context.fillStyle = theme.accent;
+  context.font = "700 16px 'DM Sans', Arial, sans-serif";
+  context.fillText("TOP ARTIST", 100, 1014);
+  context.fillStyle = theme.text;
+  context.font = "500 38px 'Bodoni Moda', Georgia, serif";
+  drawWrappedText(context, topArtist.name || "Unknown", 100, 1058, 525, 40, 1);
+
+  context.fillStyle = theme.muted;
+  context.font = "700 18px 'DM Sans', Arial, sans-serif";
+  context.fillText("DISCOVERY", 714, 482);
+  context.fillStyle = theme.accent;
+  context.font = "500 106px 'Bodoni Moda', Georgia, serif";
+  context.fillText(`${discovery.score ?? "--"}%`, 706, 578);
+  context.fillStyle = theme.textSoft;
+  context.font = "600 17px 'DM Sans', Arial, sans-serif";
+  drawWrappedText(context, discovery.label || "Discovery Score", 714, 614, 270, 22, 2);
+
+  context.strokeStyle = "rgba(255, 255, 255, .16)";
+  context.lineWidth = 2;
+  context.beginPath();
+  context.moveTo(714, 660);
+  context.lineTo(1010, 660);
+  context.stroke();
+  context.fillStyle = theme.muted;
+  context.font = "700 16px 'DM Sans', Arial, sans-serif";
+  context.fillText("TOP GENRE", 714, 710);
+  context.fillStyle = theme.text;
+  context.font = "500 42px 'Bodoni Moda', Georgia, serif";
+  drawWrappedText(context, formatGenreLabel(topGenre.name || "Mixed"), 714, 762, 286, 44, 2);
+
+  context.strokeStyle = "rgba(255, 255, 255, .16)";
+  context.beginPath();
+  context.moveTo(714, 850);
+  context.lineTo(1010, 850);
+  context.stroke();
+  context.fillStyle = theme.accent;
+  context.font = "700 16px 'DM Sans', Arial, sans-serif";
+  context.fillText("TOP SONG", 714, 900);
+  context.fillStyle = theme.text;
+  context.font = "500 42px 'Bodoni Moda', Georgia, serif";
+  drawWrappedText(context, topTrack.name || "Unknown", 714, 952, 286, 44, 3);
+  context.fillStyle = theme.muted;
+  context.font = "500 18px 'DM Sans', Arial, sans-serif";
+  drawWrappedText(context, getArtistLabel(topTrack), 714, 1090, 286, 23, 2);
+}
+
+async function drawWrappedArtistsShare(context, report, theme) {
+  const artists = (report?.top_artists || []).slice(0, 5);
+  const images = await Promise.all(artists.map((artist) => loadWrappedCanvasImage(getArtistImageUrl(artist))));
+  const topArtist = artists[0] || {};
+  context.fillStyle = theme.text;
+  context.font = "500 72px 'Bodoni Moda', Georgia, serif";
+  drawWrappedText(context, "The artists that defined your listening.", 70, 200, 940, 72, 2);
+  drawWrappedArtwork(context, images[0], 70, 348, 590, 710, theme, topArtist.name);
+  context.fillStyle = theme.accent;
+  context.fillRect(70, 948, 590, 110);
+  context.fillStyle = theme.accentInk;
+  context.font = "700 17px 'DM Sans', Arial, sans-serif";
+  context.fillText("1 / TOP ARTIST", 102, 988);
+  context.font = "500 42px 'Bodoni Moda', Georgia, serif";
+  drawWrappedText(context, topArtist.name || "Unknown", 102, 1036, 520, 44, 1);
+
+  artists.slice(1).forEach((artist, index) => {
+    const y = 348 + index * 176;
+    drawWrappedArtwork(context, images[index + 1], 710, y, 132, 132, theme, artist.name);
+    context.fillStyle = theme.accent;
+    context.font = "700 15px 'DM Sans', Arial, sans-serif";
+    context.fillText(`${index + 2}`, 870, y + 30);
+    context.fillStyle = theme.text;
+    context.font = "500 29px 'Bodoni Moda', Georgia, serif";
+    drawWrappedText(context, artist.name || "Unknown", 870, y + 72, 140, 31, 2);
+  });
+  context.fillStyle = theme.textSoft;
+  context.font = "400 23px 'DM Sans', Arial, sans-serif";
+  drawWrappedText(context, report?.taste_summary || "", 70, 1150, 920, 31, 3);
+}
+
+async function drawWrappedSongsShare(context, report, theme) {
+  const tracks = (report?.top_tracks || []).slice(0, 5);
+  const images = await Promise.all(tracks.map((track) => loadWrappedCanvasImage(getTrackImageUrl(track))));
+  const topTrack = tracks[0] || {};
+  context.fillStyle = theme.text;
+  context.font = "500 70px 'Bodoni Moda', Georgia, serif";
+  drawWrappedText(context, "The songs at the center of your world.", 70, 200, 940, 70, 2);
+  drawWrappedArtwork(context, images[0], 70, 340, 540, 540, theme, topTrack.name);
+  context.fillStyle = theme.accent;
+  context.fillRect(70, 880, 540, 200);
+  context.fillStyle = theme.accentInk;
+  context.font = "700 16px 'DM Sans', Arial, sans-serif";
+  context.fillText("1 / TOP SONG", 102, 923);
+  context.font = "500 34px 'Bodoni Moda', Georgia, serif";
+  drawWrappedText(context, topTrack.name || "Unknown", 102, 968, 475, 36, 2);
+  context.font = "500 18px 'DM Sans', Arial, sans-serif";
+  drawWrappedText(context, getArtistLabel(topTrack), 102, 1054, 475, 22, 1);
+
+  tracks.slice(1).forEach((track, index) => {
+    const column = index % 2;
+    const row = Math.floor(index / 2);
+    const x = 650 + column * 180;
+    const y = 340 + row * 340;
+    drawWrappedArtwork(context, images[index + 1], x, y, 160, 160, theme, track.name);
+    context.fillStyle = theme.accent;
+    context.font = "700 14px 'DM Sans', Arial, sans-serif";
+    context.fillText(`${index + 2}`, x, y + 194);
+    context.fillStyle = theme.text;
+    context.font = "500 25px 'Bodoni Moda', Georgia, serif";
+    drawWrappedText(context, track.name || "Unknown", x, y + 228, 160, 27, 2);
+    context.fillStyle = theme.muted;
+    context.font = "500 15px 'DM Sans', Arial, sans-serif";
+    drawWrappedText(context, getArtistLabel(track), x, y + 290, 160, 20, 2);
+  });
+  context.fillStyle = theme.textSoft;
+  context.font = "400 23px 'DM Sans', Arial, sans-serif";
+  drawWrappedText(context, report?.taste_summary || "", 70, 1140, 920, 31, 3);
+}
+
+async function drawWrappedGenresShare(context, report, theme) {
+  const genres = (report?.top_genres || []).slice(0, 6);
+  const topTracks = (report?.top_tracks || []).slice(0, 3);
+  const trackImages = await Promise.all(topTracks.map((track) => loadWrappedCanvasImage(getTrackImageUrl(track))));
+  context.fillStyle = theme.text;
+  context.font = "500 72px 'Bodoni Moda', Georgia, serif";
+  drawWrappedText(context, "The sounds shaping your listening palette.", 70, 200, 940, 72, 2);
+
+  genres.forEach((genre, index) => {
+    const y = 376 + index * 116;
+    context.fillStyle = index === 0 ? theme.accent : theme.muted;
+    context.font = "700 16px 'DM Sans', Arial, sans-serif";
+    context.fillText(`${index + 1}`, 70, y);
+    context.fillStyle = index === 0 ? theme.accent : theme.text;
+    context.font = `${index === 0 ? 500 : 400} ${index === 0 ? 55 : 42}px 'Bodoni Moda', Georgia, serif`;
+    drawWrappedText(context, formatGenreLabel(genre.name || "Mixed"), 120, y, 500, index === 0 ? 56 : 45, 1);
+    context.strokeStyle = "rgba(255, 255, 255, .15)";
+    context.beginPath();
+    context.moveTo(70, y + 42);
+    context.lineTo(610, y + 42);
+    context.stroke();
+  });
+
+  context.fillStyle = theme.secondary;
+  context.fillRect(665, 330, 345, 650);
+  context.fillStyle = theme.secondaryInk;
+  context.font = "700 17px 'DM Sans', Arial, sans-serif";
+  context.fillText("TOP TRACKS", 700, 378);
+  topTracks.forEach((track, index) => {
+    const y = 424 + index * 172;
+    drawWrappedArtwork(context, trackImages[index], 700, y, 118, 118, theme, track.name);
+    context.font = "700 15px 'DM Sans', Arial, sans-serif";
+    context.fillText(`${index + 1}`, 842, y + 26);
+    context.font = "500 27px 'Bodoni Moda', Georgia, serif";
+    drawWrappedText(context, track.name || "Unknown", 842, y + 62, 140, 29, 2);
+  });
+  if (!topTracks.length) {
+    context.font = "500 34px 'Bodoni Moda', Georgia, serif";
+    drawWrappedText(context, "Your Top Tracks will appear here as Spotify learns your listening.", 700, 470, 265, 40, 4);
+  }
+  context.fillStyle = theme.textSoft;
+  context.font = "400 23px 'DM Sans', Arial, sans-serif";
+  drawWrappedText(context, report?.taste_summary || "", 70, 1120, 920, 31, 4);
+}
+
+async function buildWrappedImageCanvas(report, pane = "overview") {
   const card = report?.share_card || {};
   const canvas = document.createElement("canvas");
   const context = canvas.getContext("2d");
@@ -3113,101 +3724,20 @@ async function buildWrappedImageCanvas(report) {
   const height = 1350;
   canvas.width = width;
   canvas.height = height;
-
-  const topTrack = card.top_track || {};
-  const topArtist = card.top_artist || {};
-  const topGenre = card.top_genre || {};
-  const discovery = report?.discovery_score || card.discovery_score || {};
-  const personality = report?.listening_personality || card.personality || {};
-  const artistName = topArtist.name || "Unknown";
-  const trackName = topTrack.name || "Unknown";
-  const genreName = formatGenreLabel(topGenre.name || "Mixed");
-  const score = `${discovery.score ?? "--"}%`;
+  await document.fonts?.ready;
+  const theme = await getWrappedShareTheme(report);
+  canvas.wrappedShareTheme = theme;
   const rangeLabel = report?.time_range?.label || getWrappedPeriod().label;
-  const visibleArtistImage = elements.wrappedShareCard?.querySelector(".wrapped-featured-artist img");
-  const artistImage = visibleArtistImage?.complete && visibleArtistImage.naturalWidth
-    ? visibleArtistImage
-    : await loadWrappedCanvasImage(getArtistImageUrl(topArtist) || getTrackImageUrl(topTrack));
+  const labels = { overview: "Overview", artists: "Top Artists", songs: "Top Songs", genres: "Genres + Top Tracks" };
 
-  const styles = getComputedStyle(document.documentElement);
-  const background = styles.getPropertyValue("--bg-depth").trim() || "#090b11";
-  const accent = styles.getPropertyValue("--accent").trim() || "#9fd7ca";
-  const secondary = styles.getPropertyValue("--color-secondary").trim() || "#f2c7db";
-  const accentInk = styles.getPropertyValue("--accent-ink").trim() || "#11131a";
-  const text = styles.getPropertyValue("--text").trim() || "#f8f7fb";
-  const textSoft = styles.getPropertyValue("--text-soft").trim() || "#e5e2ed";
-
-  context.fillStyle = background;
+  context.fillStyle = theme.background;
   context.fillRect(0, 0, width, height);
-  context.fillStyle = accent;
-  context.fillRect(0, 0, width, 278);
-
-  context.fillStyle = accentInk;
-  context.font = "700 22px 'DM Sans', Arial, sans-serif";
-  context.fillText("SPOTIFEEL / WRAPPED ANYTIME", 70, 64);
-  context.textAlign = "right";
-  context.fillText(String(rangeLabel).toUpperCase(), 1010, 64);
-  context.textAlign = "left";
-  context.font = "600 72px 'Bodoni Moda', Georgia, serif";
-  drawWrappedText(context, personality.title || "The Taste Architect", 70, 145, 880, 67, 2);
-
-  if (artistImage) {
-    drawWrappedCoverImage(context, artistImage, 70, 328, 622, 560);
-  } else {
-    context.fillStyle = "#20232b";
-    context.fillRect(70, 328, 622, 560);
-    context.fillStyle = textSoft;
-    context.font = "500 210px 'Bodoni Moda', Georgia, serif";
-    context.fillText(artistName.slice(0, 1).toUpperCase(), 270, 680);
-  }
-
-  context.fillStyle = "rgba(7, 9, 14, 0.9)";
-  context.fillRect(70, 792, 622, 96);
-  context.fillStyle = accent;
-  context.font = "700 17px 'DM Sans', Arial, sans-serif";
-  context.fillText("TOP ARTIST", 100, 829);
-  context.fillStyle = text;
-  context.font = "500 38px 'Bodoni Moda', Georgia, serif";
-  drawWrappedText(context, artistName, 100, 868, 552, 40, 1);
-
-  context.fillStyle = secondary;
-  context.fillRect(692, 328, 318, 560);
-  context.fillStyle = text;
-  context.font = "500 138px 'Bodoni Moda', Georgia, serif";
-  context.fillText(score, 732, 510);
-  context.font = "700 18px 'DM Sans', Arial, sans-serif";
-  context.fillText("DISCOVERY", 736, 553);
-  context.fillRect(736, 586, 230, 5);
-  context.font = "700 22px 'DM Sans', Arial, sans-serif";
-  drawWrappedText(context, discovery.label || "Discovery Score", 736, 645, 230, 28, 2);
-  context.font = "400 19px 'DM Sans', Arial, sans-serif";
-  drawWrappedText(context, discovery.detail || "", 736, 724, 230, 29, 4);
-  context.font = "700 16px 'DM Sans', Arial, sans-serif";
-  context.fillText("TOP GENRE", 736, 830);
-  context.font = "500 31px 'Bodoni Moda', Georgia, serif";
-  drawWrappedText(context, genreName, 736, 865, 230, 33, 1);
-
-  context.strokeStyle = "rgba(255, 255, 255, 0.24)";
-  context.lineWidth = 2;
-  context.beginPath();
-  context.moveTo(70, 958);
-  context.lineTo(1010, 958);
-  context.stroke();
-  context.fillStyle = accent;
-  context.font = "700 18px 'DM Sans', Arial, sans-serif";
-  context.fillText("TOP SONG", 70, 1010);
-  context.fillStyle = text;
-  context.font = "500 65px 'Bodoni Moda', Georgia, serif";
-  drawWrappedText(context, trackName, 70, 1086, 920, 65, 2);
-
-  context.fillStyle = textSoft;
-  context.font = "400 24px 'DM Sans', Arial, sans-serif";
-  drawWrappedText(context, personality.detail || "", 70, 1240, 760, 34, 2);
-  context.fillStyle = accent;
-  context.fillRect(70, 1300, 48, 5);
-  context.fillStyle = "rgba(255, 255, 255, 0.62)";
-  context.font = "500 18px 'DM Sans', Arial, sans-serif";
-  context.fillText("spotifeel.app", 138, 1307);
+  drawWrappedShareHeader(context, theme, rangeLabel, labels[pane] || labels.overview);
+  if (pane === "artists") await drawWrappedArtistsShare(context, report, theme);
+  else if (pane === "songs") await drawWrappedSongsShare(context, report, theme);
+  else if (pane === "genres") await drawWrappedGenresShare(context, report, theme);
+  else await drawWrappedOverviewShare(context, report, theme);
+  drawWrappedShareFooter(context, theme);
 
   return canvas;
 }
@@ -3223,32 +3753,142 @@ function downloadBlob(blob, filename) {
   window.setTimeout(() => URL.revokeObjectURL(url), 500);
 }
 
+let wrappedSharePending = false;
+let wrappedShareBlob = null;
+let wrappedShareFilename = "";
+let wrappedSharePreviewUrl = "";
+let wrappedShareReturnFocus = null;
+let wrappedShareScrollY = 0;
+
+function closeWrappedSharePreview() {
+  const dialog = document.querySelector(".wrapped-share-dialog");
+  if (dialog?.open) dialog.close();
+}
+
+function cleanupWrappedSharePreview() {
+  if (wrappedSharePreviewUrl) URL.revokeObjectURL(wrappedSharePreviewUrl);
+  wrappedSharePreviewUrl = "";
+  wrappedShareBlob = null;
+  wrappedShareFilename = "";
+  window.requestAnimationFrame(() => jumpWindowScroll(wrappedShareScrollY));
+  wrappedShareReturnFocus?.focus?.({ preventScroll: true });
+  wrappedShareReturnFocus = null;
+}
+
+function ensureWrappedShareDialog() {
+  let dialog = document.querySelector(".wrapped-share-dialog");
+  if (dialog) return dialog;
+  dialog = document.createElement("dialog");
+  dialog.className = "wrapped-share-dialog";
+  dialog.setAttribute("aria-labelledby", "wrapped-share-preview-title");
+  dialog.innerHTML = `
+    <div class="wrapped-share-dialog__shell">
+      <header class="wrapped-share-dialog__header">
+        <div>
+          <span>Wrapped Anytime</span>
+          <h2 id="wrapped-share-preview-title">Share your listening</h2>
+          <p class="wrapped-share-dialog__context"></p>
+        </div>
+        <button class="wrapped-share-dialog__close" type="button" aria-label="Close share preview"><i class="bx bx-x" aria-hidden="true"></i></button>
+      </header>
+      <figure class="wrapped-share-dialog__preview">
+        <img alt="Generated SpotiFeel Wrapped share image preview">
+      </figure>
+      <div class="wrapped-share-dialog__actions">
+        <button type="button" data-share-action="download">Download Image</button>
+        <button type="button" data-share-action="share">Share</button>
+        <button type="button" data-share-action="copy">Copy</button>
+      </div>
+      <p class="wrapped-share-dialog__status" role="status" aria-live="polite"></p>
+    </div>
+  `;
+  document.body.appendChild(dialog);
+  dialog.querySelector(".wrapped-share-dialog__close").addEventListener("click", closeWrappedSharePreview);
+  dialog.addEventListener("click", (event) => {
+    if (event.target === dialog) closeWrappedSharePreview();
+  });
+  dialog.addEventListener("close", cleanupWrappedSharePreview);
+  dialog.querySelector('[data-share-action="download"]').addEventListener("click", () => {
+    if (!wrappedShareBlob) return;
+    downloadBlob(wrappedShareBlob, wrappedShareFilename);
+    dialog.querySelector(".wrapped-share-dialog__status").textContent = "Image downloaded.";
+  });
+  dialog.querySelector('[data-share-action="share"]').addEventListener("click", async () => {
+    if (!wrappedShareBlob) return;
+    const file = new File([wrappedShareBlob], wrappedShareFilename, { type: "image/png" });
+    try {
+      await navigator.share({ title: "SpotiFeel Wrapped Anytime", files: [file] });
+      dialog.querySelector(".wrapped-share-dialog__status").textContent = "Share sheet opened.";
+    } catch (error) {
+      if (error?.name !== "AbortError") dialog.querySelector(".wrapped-share-dialog__status").textContent = "Sharing is unavailable here. Download still works.";
+    }
+  });
+  dialog.querySelector('[data-share-action="copy"]').addEventListener("click", async () => {
+    if (!wrappedShareBlob) return;
+    try {
+      await navigator.clipboard.write([new ClipboardItem({ "image/png": wrappedShareBlob })]);
+      dialog.querySelector(".wrapped-share-dialog__status").textContent = "Image copied.";
+    } catch (_error) {
+      dialog.querySelector(".wrapped-share-dialog__status").textContent = "Image copy is unavailable here. Download still works.";
+    }
+  });
+  return dialog;
+}
+
+function openWrappedSharePreview(blob, filename, pane, rangeLabel, theme = {}) {
+  const dialog = ensureWrappedShareDialog();
+  wrappedShareBlob = blob;
+  wrappedShareFilename = filename;
+  wrappedSharePreviewUrl = URL.createObjectURL(blob);
+  dialog.querySelector("img").src = wrappedSharePreviewUrl;
+  dialog.querySelector(".wrapped-share-dialog__context").textContent = `${rangeLabel} · ${pane}`;
+  dialog.style.setProperty("--share-accent", theme.accent || "var(--accent-primary)");
+  dialog.style.setProperty("--share-accent-ink", theme.accentInk || "var(--accent-ink)");
+  dialog.style.setProperty("--share-background", theme.background || "var(--surface-dark)");
+  dialog.style.setProperty("--share-text", theme.text || "var(--text)");
+  dialog.style.setProperty("--share-muted", theme.muted || "var(--muted)");
+  dialog.querySelector(".wrapped-share-dialog__status").textContent = "";
+  const shareButton = dialog.querySelector('[data-share-action="share"]');
+  const copyButton = dialog.querySelector('[data-share-action="copy"]');
+  shareButton.hidden = false;
+  copyButton.hidden = false;
+  wrappedShareReturnFocus = document.activeElement;
+  wrappedShareScrollY = window.scrollY || document.documentElement.scrollTop || 0;
+  dialog.showModal();
+  dialog.querySelector(".wrapped-share-dialog__close").focus({ preventScroll: true });
+}
+
 async function shareWrappedImage() {
   if (!state.wrappedReport) {
     setWrappedStatus("Generate a report before sharing an image.", "error");
     return;
   }
+  if (wrappedSharePending) return;
 
+  const report = state.wrappedReport;
+  const pane = state.activeWrappedPane;
+  const range = state.activeWrappedRange;
+  const rangeLabel = report?.time_range?.label || getWrappedPeriod().label;
+  const paneLabel = { overview: "Overview", artists: "Artists", songs: "Songs", genres: "Genres" }[pane] || "Overview";
+  const idleLabel = elements.wrappedImageShare.textContent;
+  wrappedSharePending = true;
+  elements.wrappedImageShare.disabled = true;
+  elements.wrappedImageShare.setAttribute("aria-busy", "true");
+  elements.wrappedImageShare.textContent = "Creating…";
   try {
     setWrappedStatus("Creating your share image...");
-    const canvas = await buildWrappedImageCanvas(state.wrappedReport);
+    const canvas = await buildWrappedImageCanvas(report, pane);
     const blob = await canvasBlob(canvas);
-    const filename = `spotifeel-${state.activeWrappedRange}.png`;
-    const file = new File([blob], filename, { type: "image/png" });
-
-    if (navigator.canShare?.({ files: [file] }) && navigator.share) {
-      await navigator.share({
-        title: state.wrappedReport?.share_card?.headline || "SpotiFeel Wrapped Anytime",
-        files: [file],
-      });
-      setWrappedStatus("Image share sheet opened.", "success");
-      return;
-    }
-
-    downloadBlob(blob, filename);
-    setWrappedStatus("Image downloaded.", "success");
+    const filename = `spotifeel-${range}-${pane}.png`;
+    openWrappedSharePreview(blob, filename, paneLabel, rangeLabel, canvas.wrappedShareTheme);
+    setWrappedStatus("Share image ready.", "success");
   } catch (_error) {
-    setWrappedStatus("Image sharing failed. Try again after regenerating the report.", "error");
+    setWrappedStatus("Image generation failed. Download remains available after retrying.", "error");
+  } finally {
+    wrappedSharePending = false;
+    setWrappedShareAvailable(!!state.wrappedReport);
+    elements.wrappedImageShare.removeAttribute("aria-busy");
+    elements.wrappedImageShare.textContent = idleLabel;
   }
 }
 
@@ -3258,6 +3898,8 @@ function resetSignedOutUi() {
   state.currentTrackKey = null;
   state.previousTrackSnapshot = null;
   state.activeCardKey = null;
+  state.recentDayKey = "";
+  state.todayRecentItems = [];
   state.currentGenre = null;
   state.currentTags = [];
   state.currentMood = null;
@@ -3284,7 +3926,7 @@ function resetSignedOutUi() {
   });
   setHeroMeta({
     item: null,
-    context: "Log in and start a song to let the interface follow the album art, mood, and motion of the music.",
+    context: "Start a song and SpotiFeel will follow its artwork, mood, and motion.",
   });
   setPlayerState({
     title: "Connect Spotify",
@@ -3327,7 +3969,7 @@ async function syncSession() {
     syncAuthButtons();
 
     if (!authenticated) {
-      showBanner("Connect Spotify to unlock playback sync, recommendations, and playlist creation.", "Connect Spotify");
+      showBanner("Connect Spotify to sync playback and unlock your listening tools.", "Connect Spotify");
       resetSignedOutUi();
       return;
     }
@@ -3393,7 +4035,6 @@ async function fetchTrackMetadata(trackKey, lyricsRequestToken = state.lyricsReq
         timing: lyrics.timing || "plain",
         source: lyrics.source || "",
         searchUrls: lyrics.search_urls || null,
-        interactive: true,
       });
       syncLyricsPlayback(getCurrentProgressMs(), { forceFollow: true });
     } else {
@@ -3402,7 +4043,6 @@ async function fetchTrackMetadata(trackKey, lyricsRequestToken = state.lyricsReq
         subtitle: `Lyrics weren't found for ${activeArtist} yet.`,
         content: "SpotiFeel couldn't pull lyrics for this song right now. Use the links below to keep following along.",
         searchUrls: lyrics?.search_urls || null,
-        interactive: false,
       });
     }
 
@@ -3415,7 +4055,6 @@ async function fetchTrackMetadata(trackKey, lyricsRequestToken = state.lyricsReq
       title: state.currentItem?.name || "Lyrics unavailable.",
       subtitle: "Track metadata did not respond.",
       content: "Try again in a moment while the optional music services recover.",
-      interactive: false,
     });
   }
 }
@@ -3481,7 +4120,6 @@ async function fetchLyrics(trackKey, lyricsRequestToken = state.lyricsRequestTok
         content:
           "SpotiFeel couldn't pull lyrics for this song right now. Use the links below to keep following along.",
         searchUrls: data?.search_urls || null,
-        interactive: false,
       });
       return;
     }
@@ -3494,7 +4132,6 @@ async function fetchLyrics(trackKey, lyricsRequestToken = state.lyricsRequestTok
       timing: data.timing || "plain",
       source: data.source || "",
       searchUrls: data.search_urls || null,
-      interactive: true,
     });
     syncLyricsPlayback(getCurrentProgressMs(), { forceFollow: true });
   } catch (_error) {
@@ -3503,7 +4140,6 @@ async function fetchLyrics(trackKey, lyricsRequestToken = state.lyricsRequestTok
       title: state.currentItem?.name || "Lyrics unavailable.",
       subtitle: "The lyrics service didn't respond for this track.",
       content: "Try again in a moment or use the lyric search links when they are available.",
-      interactive: false,
     });
   }
 }
@@ -3550,6 +4186,7 @@ async function fetchRecommendations(trackKey) {
 
 function applyNowPlaying(item, { trackChanged = false, preview = false } = {}) {
   state.currentItem = item;
+  syncExperienceState();
   const trackKey = getTrackKey(item);
   if (trackKey) setActiveCard(trackKey);
   if (trackChanged) {
@@ -3619,7 +4256,7 @@ async function fetchNowPlaying({ forceMeta = false, force = false } = {}) {
       updateVinyl(null);
       setHeroMeta({
         item: null,
-        context: "Start a track in Spotify and this hero will expand around the artwork, lyrics, and motion of the song.",
+        context: "SpotiFeel will pick up the next track automatically and reshape the page around it.",
       });
       renderLyricsView({
         title: "Play a song to view lyrics.",
@@ -3722,7 +4359,9 @@ async function fetchRecentTracks({ force = false } = {}) {
   state.lastRecentRequestAt = now;
   try {
     renderDayLoading();
-    const { response, data } = await getJson("/api/recently-played?limit=50");
+    const { start } = getTodayBounds();
+    const query = new URLSearchParams({ limit: "50", after: String(start.getTime()) });
+    const { response, data } = await getJson(`/api/recently-played?${query.toString()}`);
     if (response.status === 401 || data?.error === "not_authenticated") {
       state.authenticated = false;
       syncAuthButtons();
@@ -3731,18 +4370,22 @@ async function fetchRecentTracks({ force = false } = {}) {
       return;
     }
     if (!response.ok || !Array.isArray(data?.items)) {
+      if (state.todayRecentItems.length) {
+        renderFeelingHistory(state.todayRecentItems);
+        return;
+      }
       renderDayUnavailable(
         "Recently played is unavailable.",
         "Spotify did not return listening history right now."
       );
       return;
     }
-    if (data.items.length === 0) {
-      renderFeelingHistory([]);
+    renderFeelingHistory(mergeTodayRecentItems(data.items));
+  } catch (_error) {
+    if (state.todayRecentItems.length) {
+      renderFeelingHistory(state.todayRecentItems);
       return;
     }
-    renderFeelingHistory(data.items);
-  } catch (_error) {
     renderDayUnavailable(
       "Recently played is unavailable.",
       "Spotify did not return listening history right now."

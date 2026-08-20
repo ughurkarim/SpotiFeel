@@ -9,6 +9,8 @@ export const state = {
   currentAudioProfile: null,
   nowPlayingPending: false,
   recentPending: false,
+  recentDayKey: "",
+  todayRecentItems: [],
   wrappedPending: false,
   activePlaylist: null,
   activeView: "card",

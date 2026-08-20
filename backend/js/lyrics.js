@@ -1,7 +1,3 @@
-function clamp(value, min = 0, max = 1) {
-  return Math.min(max, Math.max(min, value));
-}
-
 export function buildLyricLines(content = "") {
   return String(content)
     .replace(/\r/g, "")
@@ -20,8 +16,10 @@ export function buildLyricLines(content = "") {
 
 export function parseSyncedLyrics(content = "", totalDurationMs = 0) {
   const entries = [];
-  String(content)
-    .replace(/\r/g, "")
+  const normalizedContent = String(content).replace(/\r/g, "");
+  const offsetMatch = normalizedContent.match(/\[offset:\s*([+-]?\d+)\s*\]/i);
+  const offsetMs = Number(offsetMatch?.[1]) || 0;
+  normalizedContent
     .split("\n")
     .forEach((rawLine) => {
       const timestamps = [...rawLine.matchAll(/\[(\d{1,3}):(\d{2})(?:[.:](\d{1,3}))?\]/g)];
@@ -34,7 +32,7 @@ export function parseSyncedLyrics(content = "", totalDurationMs = 0) {
       timestamps.forEach((match) => {
         const fraction = match[3] || "0";
         const fractionMs = Number(fraction.padEnd(3, "0").slice(0, 3));
-        const start = Number(match[1]) * 60_000 + Number(match[2]) * 1_000 + fractionMs;
+        const start = Math.max(0, Number(match[1]) * 60_000 + Number(match[2]) * 1_000 + fractionMs + offsetMs);
         if (Number.isFinite(start)) entries.push({ text, start });
       });
     });
@@ -46,25 +44,21 @@ export function parseSyncedLyrics(content = "", totalDurationMs = 0) {
   }));
 }
 
-export function buildLyricTimeline(lines = [], totalDurationMs = 0) {
-  const lyricLines = lines.filter((line) => line.type === "line");
-  if (!lyricLines.length || totalDurationMs <= 0) return [];
-  const introMs = Math.min(clamp(totalDurationMs * 0.055, 3_500, 14_000), totalDurationMs * 0.18);
-  const outroMs = Math.min(clamp(totalDurationMs * 0.035, 3_000, 10_000), totalDurationMs * 0.14);
-  const timelineEnd = Math.max(introMs, totalDurationMs - outroMs);
-  const usableDuration = Math.max(1, timelineEnd - introMs);
-  const weights = lyricLines.map((line) => {
-    const wordWeight = line.text.split(/\s+/).filter(Boolean).length * 0.24;
-    const characterWeight = clamp(line.text.length / 30, 0.65, 2.2);
-    return characterWeight + wordWeight + (line.stanzaBreak ? 0.34 : 0);
-  });
-  const totalWeight = weights.reduce((sum, weight) => sum + weight, 0) || 1;
-  let cursor = introMs;
-  return lyricLines.map((line, index) => {
-    const segmentDuration = (weights[index] / totalWeight) * usableDuration;
-    const start = cursor;
-    const end = index === lyricLines.length - 1 ? timelineEnd : Math.min(timelineEnd, cursor + segmentDuration);
-    cursor = end;
-    return { text: line.text, start, end };
-  });
+export function findActiveLyricIndex(timeline = [], currentMs = 0) {
+  if (!timeline.length || !Number.isFinite(currentMs)) return -1;
+  let low = 0;
+  let high = timeline.length - 1;
+  let activeIndex = -1;
+
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2);
+    if (timeline[middle].start <= currentMs) {
+      activeIndex = middle;
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
+  }
+
+  return activeIndex;
 }

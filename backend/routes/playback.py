@@ -1,5 +1,6 @@
 from datetime import datetime
 
+import requests
 from flask import Blueprint, jsonify, request
 
 import core
@@ -39,11 +40,17 @@ def recently_played():
     max_pages = 20 if after_ms is not None else 1
 
     for _ in range(max_pages):
-        response = core.http_get(
-            "https://api.spotify.com/v1/me/player/recently-played",
-            headers=core.spotify_headers(),
-            params=params,
-        )
+        try:
+            response = core.http_get(
+                "https://api.spotify.com/v1/me/player/recently-played",
+                headers=core.spotify_headers(),
+                params=params,
+            )
+        except requests.RequestException:
+            if items:
+                break
+            core.app.logger.warning("Spotify recent tracks request failed", exc_info=True)
+            return jsonify({"error": "recent_tracks_unavailable", "message": "Recent listening is temporarily unavailable."}), 502
         page = core.safe_json(response)
         if response.status_code != 200 or page is None:
             if items:

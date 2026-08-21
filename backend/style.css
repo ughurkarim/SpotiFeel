@@ -635,24 +635,35 @@ main {
 
 #hero-title {
   max-width: 760px;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
   color: var(--text);
   font-family: var(--font-display);
   font-size: clamp(64px, 8.4vw, 132px);
   font-weight: 500;
+  hyphens: none;
   letter-spacing: -0.075em;
   line-height: 0.82;
   text-wrap: balance;
+  word-break: normal;
 }
 
 #hero-title.hero-title--medium {
-  font-size: clamp(50px, 6.2vw, 88px);
-  line-height: .86;
+  font-size: clamp(48px, 5.5vw, 82px);
+  line-height: .88;
 }
 
 #hero-title.hero-title--long {
-  font-size: clamp(40px, 4.5vw, 64px);
-  line-height: .94;
+  font-size: clamp(38px, 4.15vw, 60px);
+  line-height: .93;
+}
+
+#hero-title.hero-title--extreme {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: clamp(32px, 3.25vw, 48px);
+  line-height: .98;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
 }
 
 .hero-artist {
@@ -7801,4 +7812,53 @@ body.experience-disconnected .session-banner .btn:focus-visible {
   #recent-tracks .day-period-highlight > h4 { font-size: 14px; }
   #recent-tracks .day-period-highlight.is-featured > h4 { font-size: 17px; }
   #recent-tracks .day-timeline-event__tooltip { max-width: 180px; }
+}
+
+/* Length-aware hero typography. Kept last so every layout mode shares the same safeguards. */
+@media (min-width: 901px) {
+  #hero-title.hero-title--medium {
+    font-size: clamp(48px, 5.3vw, 82px);
+    line-height: .88;
+  }
+
+  #hero-title.hero-title--long {
+    font-size: clamp(38px, 4.15vw, 60px);
+    line-height: .93;
+  }
+
+  #hero-title.hero-title--extreme {
+    font-size: clamp(32px, 3.25vw, 48px);
+    line-height: .98;
+    -webkit-line-clamp: 3;
+  }
+}
+
+@media (min-width: 681px) and (max-width: 900px) {
+  #hero-title.hero-title--medium { font-size: clamp(46px, 7.5vw, 68px); }
+  #hero-title.hero-title--long { font-size: clamp(38px, 6.2vw, 56px); }
+  #hero-title.hero-title--extreme { font-size: clamp(32px, 5.2vw, 46px); }
+}
+
+@media (max-width: 680px) {
+  #hero-title {
+    max-width: 100%;
+    font-size: clamp(48px, 16vw, 72px);
+    line-height: .86;
+  }
+
+  #hero-title.hero-title--medium {
+    font-size: clamp(41px, 12.5vw, 60px);
+    line-height: .9;
+  }
+
+  #hero-title.hero-title--long {
+    font-size: clamp(34px, 10.5vw, 48px);
+    line-height: .95;
+  }
+
+  #hero-title.hero-title--extreme {
+    font-size: clamp(29px, 8.5vw, 40px);
+    line-height: 1;
+    -webkit-line-clamp: 4;
+  }
 }

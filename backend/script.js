@@ -1,6 +1,19 @@
 import { apiRequest, setCsrfToken } from "./js/api.js";
 import { state } from "./js/state.js";
-import { formatDuration as fmt, getTrackKey, getArtistLabel } from "./js/player.js";
+import {
+  formatDuration as fmt,
+  getTrackKey,
+  getArtistLabel,
+  getHeroTitleTier,
+  HERO_TITLE_TIERS,
+} from "./js/player.js";
+import {
+  clearDailyHistory,
+  getLocalDayKey,
+  mergeDailyHistory,
+  readDailyHistory,
+  writeDailyHistory,
+} from "./js/history.js";
 import { buildPlaylistPayload } from "./js/playlists.js";
 import { hasRecommendationGroups } from "./js/recommendations.js";
 import { canvasBlob } from "./js/wrapped.js";
@@ -400,6 +413,7 @@ let vinylFrame = 0;
 let vinylRotation = 0;
 let vinylLastTick = 0;
 let heroPulseTimer = 0;
+let heroTitleFitFrame = 0;
 let overviewLayoutFrame = 0;
 let trackBoundaryTimer = 0;
 let lastPlaybackWakeSync = 0;
@@ -1896,8 +1910,7 @@ function setHeroMeta({ item = null, context = "" } = {}) {
   if (!elements.heroTitle || !elements.heroArtist || !elements.heroContext) return;
 
   if (!item) {
-    elements.heroTitle.classList.remove("hero-title--medium", "hero-title--long");
-    elements.heroTitle.textContent = state.authenticated ? "Nothing playing" : "Connect Spotify";
+    setHeroTitle(state.authenticated ? "Nothing playing" : "Connect Spotify");
     elements.heroArtist.textContent = state.authenticated
       ? "Start something on Spotify."
       : "Bring your listening into a more vivid, personal view.";
@@ -1912,15 +1925,58 @@ function setHeroMeta({ item = null, context = "" } = {}) {
   }
 
   const title = item.name || "Unknown track";
-  elements.heroTitle.textContent = title;
-  elements.heroTitle.classList.toggle("hero-title--medium", title.length > 42 && title.length <= 70);
-  elements.heroTitle.classList.toggle("hero-title--long", title.length > 70);
+  setHeroTitle(title);
   elements.heroArtist.textContent = (item.artists || []).map((artist) => artist.name).join(", ") || "Unknown artist";
   elements.heroContext.textContent = "";
   elements.heroContext.classList.add("hidden");
   updateMoodChip();
   updateGenreChip();
   setSpotifyLink(item.external_urls?.spotify || "");
+}
+
+function applyHeroTitleTier(tier) {
+  if (!elements.heroTitle) return;
+  HERO_TITLE_TIERS.slice(1).forEach((name) => {
+    elements.heroTitle.classList.toggle(`hero-title--${name}`, tier === name);
+  });
+  elements.heroTitle.dataset.titleTier = tier;
+}
+
+function fitHeroTitle(title, { reset = false } = {}) {
+  if (!elements.heroTitle || elements.heroTitle.textContent !== title) return;
+  let tierIndex = Math.max(0, HERO_TITLE_TIERS.indexOf(getHeroTitleTier(title)));
+  if (!reset) {
+    tierIndex = Math.max(tierIndex, HERO_TITLE_TIERS.indexOf(elements.heroTitle.dataset.titleTier));
+  }
+  applyHeroTitleTier(HERO_TITLE_TIERS[tierIndex]);
+
+  const maxLines = window.innerWidth <= 680 ? 4 : 3;
+  while (tierIndex < HERO_TITLE_TIERS.length - 1) {
+    const lineHeight = Number.parseFloat(window.getComputedStyle(elements.heroTitle).lineHeight);
+    if (!Number.isFinite(lineHeight) || lineHeight <= 0) break;
+    const renderedLines = Math.round(elements.heroTitle.getBoundingClientRect().height / lineHeight);
+    if (renderedLines <= maxLines) break;
+    tierIndex += 1;
+    applyHeroTitleTier(HERO_TITLE_TIERS[tierIndex]);
+  }
+}
+
+function setHeroTitle(title) {
+  if (!elements.heroTitle) return;
+  const nextTitle = String(title || "Unknown track");
+  const changed = elements.heroTitle.dataset.fullTitle !== nextTitle;
+  if (changed) {
+    elements.heroTitle.textContent = nextTitle;
+    elements.heroTitle.dataset.fullTitle = nextTitle;
+    elements.heroTitle.title = nextTitle;
+    elements.heroTitle.setAttribute("aria-label", nextTitle);
+    applyHeroTitleTier(getHeroTitleTier(nextTitle));
+  }
+  if (heroTitleFitFrame) window.cancelAnimationFrame(heroTitleFitFrame);
+  heroTitleFitFrame = window.requestAnimationFrame(() => {
+    heroTitleFitFrame = 0;
+    fitHeroTitle(nextTitle, { reset: changed });
+  });
 }
 
 function renderSkeletonCards(container, count = 6) {
@@ -2783,21 +2839,19 @@ function renderDayLoading() {
 }
 
 function mergeTodayRecentItems(items = [], reference = new Date()) {
-  const { start, end } = getTodayBounds(reference);
-  const dayKey = start.toISOString();
+  const dayKey = getLocalDayKey(reference);
   if (state.recentDayKey !== dayKey) {
     state.recentDayKey = dayKey;
     state.todayRecentItems = [];
   }
+  state.todayRecentItems = mergeDailyHistory(state.todayRecentItems, items, reference);
+  writeDailyHistory(window.sessionStorage, state.todayRecentItems, reference);
+  return state.todayRecentItems;
+}
 
-  const merged = new Map();
-  [...state.todayRecentItems, ...items].forEach((item) => {
-    const playedAt = item?.played_at ? new Date(item.played_at) : null;
-    if (!item?.track || !playedAt || Number.isNaN(playedAt.getTime()) || playedAt < start || playedAt >= end) return;
-    const key = `${item.played_at}:${getTrackKey(item.track) || item.track?.id || item.track?.name || "track"}`;
-    merged.set(key, item);
-  });
-  state.todayRecentItems = [...merged.values()].sort((left, right) => new Date(right.played_at) - new Date(left.played_at));
+function restoreTodayRecentItems(reference = new Date()) {
+  state.recentDayKey = getLocalDayKey(reference);
+  state.todayRecentItems = readDailyHistory(window.sessionStorage, reference);
   return state.todayRecentItems;
 }
 
@@ -3932,6 +3986,7 @@ function resetSignedOutUi() {
   state.activeCardKey = null;
   state.recentDayKey = "";
   state.todayRecentItems = [];
+  clearDailyHistory(window.sessionStorage);
   state.currentGenre = null;
   state.currentTags = [];
   state.currentMood = null;
@@ -4016,10 +4071,8 @@ async function syncSession() {
       await Promise.all([fetchNowPlaying({ forceMeta: true, force: true }), fetchRecentTracks({ force: true })]);
     }
   } catch (_error) {
-    state.authenticated = false;
     syncAuthButtons();
-    showBanner("SpotiFeel could not verify your Spotify session.", "Try Logging In");
-    resetSignedOutUi();
+    showBanner("SpotiFeel could not verify your Spotify session. Your current listening view has been preserved.", "Try Again");
   }
 }
 
@@ -4393,7 +4446,7 @@ async function fetchRecentTracks({ force = false } = {}) {
   state.recentPending = true;
   state.lastRecentRequestAt = now;
   try {
-    renderDayLoading();
+    if (!state.todayRecentItems.length) renderDayLoading();
     const { start } = getTodayBounds();
     const query = new URLSearchParams({ limit: "50", after: String(start.getTime()) });
     const { response, data } = await getJson(`/api/recently-played?${query.toString()}`);
@@ -4716,6 +4769,9 @@ function setupEventHandlers() {
   window.addEventListener("focus", syncPlaybackOnWake);
   window.addEventListener("resize", () => {
     syncPersistentLayout();
+    if (elements.heroTitle?.dataset.fullTitle) {
+      fitHeroTitle(elements.heroTitle.dataset.fullTitle, { reset: true });
+    }
     if (window.innerWidth < 960 && state.overviewMode) {
       state.overviewMode = false;
       applyOverviewMode();
@@ -4850,6 +4906,15 @@ async function init() {
   setNowView(state.activeView);
   renderLyricsView();
   setHeroMeta();
+  const restoredRecentItems = restoreTodayRecentItems();
+  if (restoredRecentItems.length) renderFeelingHistory(restoredRecentItems);
+  if (document.fonts?.ready) {
+    document.fonts.ready.then(() => {
+      if (elements.heroTitle?.dataset.fullTitle) {
+        fitHeroTitle(elements.heroTitle.dataset.fullTitle, { reset: true });
+      }
+    });
+  }
   updateProgressBar();
   await syncSession();
   queueOverviewLayoutSync();

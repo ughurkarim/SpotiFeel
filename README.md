@@ -303,5 +303,3 @@ I use Spotify constantly, and I wanted to make something with my listening data 
 Most Spotify projects I had seen stopped at showing top songs and artists. I wanted SpotiFeel to do more with the data by reacting to the song currently playing, finding new music, creating playlists, and letting me generate a listening report whenever I wanted one.
 
 It also gave me a reason to work through problems that were more interesting than just displaying API responses. I had to handle OAuth and token refresh, combine data from services that do not always agree with each other, rank recommendations, keep live playback responsive, and make optional APIs fail without taking down the rest of the experience.
-
-The result is a project that combines two things I like working on: music and software that feels good to use.

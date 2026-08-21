@@ -9,12 +9,12 @@ import { buildLyricLines, findActiveLyricIndex, parseSyncedLyrics } from "./js/l
 
 const POLL_INTERVALS = {
   session: 60000,
-  nowPlaying: 5000,
+  nowPlaying: 2000,
   recentTracks: 45000,
 };
 
 const REQUEST_GAPS = {
-  nowPlaying: 2500,
+  nowPlaying: 1000,
   recentTracks: 12000,
 };
 
@@ -401,6 +401,8 @@ let vinylRotation = 0;
 let vinylLastTick = 0;
 let heroPulseTimer = 0;
 let overviewLayoutFrame = 0;
+let trackBoundaryTimer = 0;
+let lastPlaybackWakeSync = 0;
 const imagePreloadCache = new Set();
 const dayPaletteCache = new Map();
 const dayArtworkPaletteCache = new Map();
@@ -1731,6 +1733,34 @@ function getCurrentProgressMs(now = Date.now()) {
   return clamp(progressMs + elapsed, 0, durationMs);
 }
 
+function clearOptimisticPlayback() {
+  state.optimisticTrackKey = null;
+  state.optimisticTrackUntil = 0;
+}
+
+function shouldHoldOptimisticPlayback(observedTrackKey = "") {
+  if (!state.optimisticTrackKey) return false;
+  if (observedTrackKey === state.optimisticTrackKey) {
+    clearOptimisticPlayback();
+    return false;
+  }
+  if (Date.now() < state.optimisticTrackUntil) return true;
+  clearOptimisticPlayback();
+  return false;
+}
+
+function scheduleTrackBoundarySync() {
+  window.clearTimeout(trackBoundaryTimer);
+  trackBoundaryTimer = 0;
+  if (!state.authenticated || !state.currentItem || !isPlaying || durationMs <= 0) return;
+  const remainingMs = durationMs - getCurrentProgressMs();
+  if (remainingMs <= 0) return;
+  trackBoundaryTimer = window.setTimeout(() => {
+    trackBoundaryTimer = 0;
+    fetchNowPlaying({ force: true });
+  }, Math.max(250, remainingMs + 180));
+}
+
 function setSpotifyLink(url) {
   if (!elements.spotifyLink) return;
   if (!url) {
@@ -2445,6 +2475,8 @@ function renderLyricsView({
 }
 
 function resetProgress() {
+  window.clearTimeout(trackBoundaryTimer);
+  trackBoundaryTimer = 0;
   progressMs = 0;
   durationMs = 0;
   isPlaying = false;
@@ -3906,6 +3938,7 @@ function resetSignedOutUi() {
   state.currentAudioProfile = null;
   state.themeRequestKey = null;
   state.backdropRequestKey = null;
+  clearOptimisticPlayback();
   state.currentLyricsLines = [];
   state.lyricTimeline = [];
   state.lyricLineElements = [];
@@ -4219,7 +4252,7 @@ async function fetchNowPlaying({ forceMeta = false, force = false } = {}) {
   state.nowPlayingPending = true;
   state.lastNowPlayingRequestAt = now;
   try {
-    const { response, data } = await getJson("/api/now-playing");
+    const { response, data } = await getJson(force ? "/api/now-playing?refresh=1" : "/api/now-playing");
 
     if (response.status === 401 || data?.error === "not_authenticated") {
       state.authenticated = false;
@@ -4238,6 +4271,7 @@ async function fetchNowPlaying({ forceMeta = false, force = false } = {}) {
     }
 
     if (data?.playing === false || !data?.item) {
+      if (shouldHoldOptimisticPlayback()) return;
       state.lyricsRequestToken += 1;
       state.currentItem = null;
       state.currentTrackKey = null;
@@ -4283,6 +4317,7 @@ async function fetchNowPlaying({ forceMeta = false, force = false } = {}) {
 
     const item = data.item;
     const trackKey = getTrackKey(item);
+    if (shouldHoldOptimisticPlayback(trackKey)) return;
     const trackChanged = trackKey !== state.currentTrackKey;
 
     progressMs = data.progress_ms || 0;
@@ -4317,6 +4352,7 @@ async function fetchNowPlaying({ forceMeta = false, force = false } = {}) {
     }
 
     applyNowPlaying(item, { trackChanged });
+    scheduleTrackBoundarySync();
 
     if (trackChanged || forceMeta) {
       applyAlbumTheme(trackKey, item.album?.images?.[0]?.url || "");
@@ -4428,6 +4464,11 @@ async function playTrack(track, card = null) {
     }, 120);
   }
 
+  if (previewChanged) {
+    state.optimisticTrackKey = trackKey;
+    state.optimisticTrackUntil = Date.now() + 2200;
+  }
+
   state.currentTrackKey = trackKey;
   state.lyricsRequestToken += 1;
   state.currentGenre = null;
@@ -4445,6 +4486,7 @@ async function playTrack(track, card = null) {
     subtitle: getArtistLabel(track),
   });
   applyNowPlaying(track, { trackChanged: previewChanged, preview: true });
+  scheduleTrackBoundarySync();
   applyAlbumTheme(trackKey, track.album?.images?.[0]?.url || "");
 
   try {
@@ -4473,12 +4515,13 @@ async function playTrack(track, card = null) {
     window.clearTimeout(loadingTimer);
     card?.classList.remove("is-loading");
     if (state.playRequestToken !== requestToken) return;
-    window.setTimeout(() => fetchNowPlaying({ forceMeta: true, force: true }), 450);
-    window.setTimeout(() => fetchNowPlaying({ forceMeta: true, force: true }), 1500);
+    window.setTimeout(() => fetchNowPlaying({ forceMeta: true, force: true }), 300);
+    window.setTimeout(() => fetchNowPlaying({ forceMeta: true, force: true }), 1100);
   } catch (_error) {
     window.clearTimeout(loadingTimer);
     card?.classList.remove("is-loading");
     if (state.playRequestToken !== requestToken) return;
+    clearOptimisticPlayback();
     state.currentTrackKey = previousTrackKey;
     state.currentItem = previousItem;
     state.currentGenre = previousGenre;
@@ -4520,6 +4563,7 @@ async function playTrack(track, card = null) {
       setActiveCard("");
       resetProgress();
     }
+    scheduleTrackBoundarySync();
     showBanner("Spotify playback needs an active device before SpotiFeel can start another track.");
   }
 }
@@ -4616,6 +4660,7 @@ async function togglePlayback() {
     progressMs = getCurrentProgressMs();
     isPlaying = data.playing;
     lastSync = Date.now();
+    scheduleTrackBoundarySync();
     if (isPlaying) triggerHeroPulse("play");
     setPlaybackVisualState();
   } catch (_error) {
@@ -4659,6 +4704,16 @@ function setupPrimarySectionObserver() {
 }
 
 function setupEventHandlers() {
+  const syncPlaybackOnWake = () => {
+    if (document.visibilityState !== "visible" || !state.authenticated) return;
+    const now = Date.now();
+    if (now - lastPlaybackWakeSync < 750) return;
+    lastPlaybackWakeSync = now;
+    fetchNowPlaying({ force: true });
+  };
+
+  document.addEventListener("visibilitychange", syncPlaybackOnWake);
+  window.addEventListener("focus", syncPlaybackOnWake);
   window.addEventListener("resize", () => {
     syncPersistentLayout();
     if (window.innerWidth < 960 && state.overviewMode) {
@@ -4801,7 +4856,7 @@ async function init() {
 
   setInterval(syncSession, POLL_INTERVALS.session);
   setInterval(() => {
-    fetchNowPlaying();
+    if (document.visibilityState === "visible") fetchNowPlaying();
   }, POLL_INTERVALS.nowPlaying);
   setInterval(() => {
     fetchRecentTracks();

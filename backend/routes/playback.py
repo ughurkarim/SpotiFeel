@@ -10,7 +10,8 @@ bp = Blueprint("playback", __name__)
 
 @bp.get("/api/now-playing")
 def now_playing():
-    payload, status = core.get_current_playback_payload(force=False)
+    force_refresh = request.args.get("refresh") == "1"
+    payload, status = core.get_current_playback_payload(force=force_refresh)
     if status == 401:
         return jsonify({"error": "not_authenticated"}), 401
     if status == 204:

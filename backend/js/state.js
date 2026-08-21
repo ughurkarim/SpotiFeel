@@ -23,6 +23,8 @@ export const state = {
   themeMode: "default",
   themeRequestKey: null,
   backdropRequestKey: null,
+  optimisticTrackKey: null,
+  optimisticTrackUntil: 0,
   currentLyricsLines: [],
   lyricTimeline: [],
   lyricLineElements: [],

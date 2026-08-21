@@ -4013,7 +4013,7 @@ async function fetchTrackMetadata(trackKey, lyricsRequestToken = state.lyricsReq
       state.currentTags = Array.isArray(genre.tags) ? genre.tags : [];
       state.currentMood = resolveMoodContext(state.currentGenre, state.currentTags);
       setReactiveProfile(genre.audio_profile || null);
-      if (state.themeMode !== "album") applyGenreTheme(state.currentGenre);
+      if (state.themeMode !== "album" && state.themeMode !== "pending") applyGenreTheme(state.currentGenre);
       updateGenreChip();
       updateMoodChip();
       if (genre.arc?.detail) renderHeroArc(genre.arc.detail);
@@ -4074,7 +4074,7 @@ async function fetchGenreNow(trackKey) {
     state.currentTags = Array.isArray(data.tags) ? data.tags : [];
     state.currentMood = resolveMoodContext(state.currentGenre, state.currentTags);
     setReactiveProfile(data?.audio_profile || null);
-    if (state.themeMode !== "album") applyGenreTheme(state.currentGenre);
+    if (state.themeMode !== "album" && state.themeMode !== "pending") applyGenreTheme(state.currentGenre);
     updateGenreChip();
     updateMoodChip();
     if (data?.arc?.detail) {
@@ -4305,8 +4305,7 @@ async function fetchNowPlaying({ forceMeta = false, force = false } = {}) {
       state.currentTags = [];
       state.currentMood = null;
       state.currentAudioProfile = null;
-      state.themeMode = "default";
-      applyGenreTheme();
+      state.themeMode = "pending";
       clearReactiveProfile();
       setYouTubeLink("");
       syncVinylMotion({ reset: true });

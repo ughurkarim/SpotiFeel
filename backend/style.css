@@ -1,3 +1,111 @@
+@property --bg-base {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #071315;
+}
+
+@property --bg-depth {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #040a0c;
+}
+
+@property --text {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #f4efe6;
+}
+
+@property --text-soft {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #d1d6d0;
+}
+
+@property --muted {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #839893;
+}
+
+@property --accent {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #5ee1d0;
+}
+
+@property --accent-strong {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #665f9a;
+}
+
+@property --accent-soft {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: rgba(94, 225, 208, 0.12);
+}
+
+@property --accent-shadow {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: rgba(94, 225, 208, 0.16);
+}
+
+@property --accent-ink {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #041312;
+}
+
+@property --border {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: rgba(177, 229, 220, 0.17);
+}
+
+@property --panel {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #0b1b1d;
+}
+
+@property --panel-strong {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #040a0c;
+}
+
+@property --panel-soft {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #102427;
+}
+
+@property --color-dominant {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #176967;
+}
+
+@property --color-secondary {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #665f9a;
+}
+
+@property --color-highlight {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #d9fff7;
+}
+
+@property --surface-tint {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: rgba(94, 225, 208, 0.1);
+}
+
 :root {
   /* Type */
   --font-display: "Bodoni Moda", Georgia, serif;
@@ -86,6 +194,27 @@
   --energy-brightness: 1.04;
   --visualizer-glow: 18px;
   --progress-smooth: 140ms;
+  --theme-transition-duration: 1800ms;
+
+  transition:
+    --bg-base var(--theme-transition-duration) var(--ease-standard),
+    --bg-depth var(--theme-transition-duration) var(--ease-standard),
+    --text var(--theme-transition-duration) var(--ease-standard),
+    --text-soft var(--theme-transition-duration) var(--ease-standard),
+    --muted var(--theme-transition-duration) var(--ease-standard),
+    --accent var(--theme-transition-duration) var(--ease-standard),
+    --accent-strong var(--theme-transition-duration) var(--ease-standard),
+    --accent-soft var(--theme-transition-duration) var(--ease-standard),
+    --accent-shadow var(--theme-transition-duration) var(--ease-standard),
+    --accent-ink var(--theme-transition-duration) var(--ease-standard),
+    --border var(--theme-transition-duration) var(--ease-standard),
+    --panel var(--theme-transition-duration) var(--ease-standard),
+    --panel-strong var(--theme-transition-duration) var(--ease-standard),
+    --panel-soft var(--theme-transition-duration) var(--ease-standard),
+    --color-dominant var(--theme-transition-duration) var(--ease-standard),
+    --color-secondary var(--theme-transition-duration) var(--ease-standard),
+    --color-highlight var(--theme-transition-duration) var(--ease-standard),
+    --surface-tint var(--theme-transition-duration) var(--ease-standard);
 }
 
 * {

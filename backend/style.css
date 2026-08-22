@@ -388,6 +388,7 @@ a:focus-visible,
   display: flex;
   flex: 0 0 auto;
   align-items: center;
+  gap: 8px;
 }
 
 .btn {
@@ -2207,6 +2208,20 @@ main {
   transition: transform 320ms var(--ease-out);
 }
 
+.playlist-card[data-playlist="hip-hop"] h3,
+.playlist-card[data-playlist="indie-pop"] h3 {
+  line-height: .9;
+}
+
+.playlist-card[data-playlist="hip-hop"] small,
+.playlist-card[data-playlist="indie-pop"] small {
+  display: block;
+  min-height: 1.45em;
+  padding-bottom: 2px;
+  overflow: visible;
+  line-height: 1.45;
+}
+
 .playlist-card::after {
   position: absolute;
   inset: 0;
@@ -3181,6 +3196,30 @@ body.overview-mode .hero-shell {
 
 .playlist-feedback .playlist-links::-webkit-scrollbar {
   display: none;
+}
+
+.playlist-preview {
+  min-width: 0;
+  grid-column: 1 / -1;
+}
+
+.playlist-preview-row {
+  gap: 12px;
+  padding: 8px 0 4px;
+}
+
+.playlist-preview-row .card {
+  flex-basis: clamp(108px, 11vw, 142px);
+}
+
+.playlist-preview-row .card-title {
+  margin-top: 8px;
+  font-size: 11px;
+}
+
+.playlist-preview-row .card-meta,
+.playlist-preview-row .card-tag {
+  font-size: 8px;
 }
 
 .playlist-card.is-loading::before { content: "Creating…"; }
@@ -6533,6 +6572,32 @@ body.experience-disconnected #login:focus-visible {
   border-color: var(--idle-accent);
   background: rgba(94, 225, 208, .07);
   color: var(--idle-accent);
+}
+
+body.experience-disconnected #demo-toggle {
+  min-height: 36px;
+  padding: 0 15px;
+  border-color: var(--idle-accent);
+  background: var(--idle-accent);
+  color: var(--idle-bg-depth);
+  white-space: nowrap;
+}
+
+body.experience-disconnected #demo-toggle:hover,
+body.experience-disconnected #demo-toggle:focus-visible,
+body.demo-mode #demo-toggle:hover,
+body.demo-mode #demo-toggle:focus-visible {
+  background: transparent;
+  color: var(--idle-accent);
+}
+
+body.demo-mode #demo-toggle {
+  min-height: 36px;
+  padding: 0 15px;
+  border-color: color-mix(in srgb, var(--accent) 52%, transparent);
+  background: transparent;
+  color: var(--text-soft);
+  white-space: nowrap;
 }
 
 body.experience-disconnected .session-banner {

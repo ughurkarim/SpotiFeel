@@ -1,5 +1,6 @@
 export const state = {
   authenticated: false,
+  demoMode: false,
   currentItem: null,
   currentTrackKey: null,
   activeCardKey: null,

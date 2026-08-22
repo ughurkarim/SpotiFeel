@@ -23,7 +23,8 @@
       <a href="#playlists">Playlists</a>
     </nav>
     <div class="auth-buttons">
-      <a id="login" class="btn btn-ghost" href="/login">LOG IN</a>
+      <a id="login" class="btn btn-ghost" href="/login">Connect Spotify</a>
+      <button id="demo-toggle" class="btn btn-ghost" type="button">Try Demo</button>
       <a id="logout" class="btn btn-ghost" href="/logout">Log out</a>
     </div>
   </div>
@@ -266,8 +267,8 @@
       <div class="playlist-grid scrollable">
         <button class="playlist-card" type="button" data-playlist="pop"><h3>Pop</h3><small>Bright / immediate</small></button>
         <button class="playlist-card" type="button" data-playlist="rock"><h3>Rock</h3><small>Raw / electric</small></button>
-        <button class="playlist-card" type="button" data-playlist="hip-hop"><h3>Hip<br>Hop</h3><small>Rhythm / flow</small></button>
-        <button class="playlist-card" type="button" data-playlist="indie-pop"><h3>Indie<br>Pop</h3><small>Offbeat / vivid</small></button>
+        <button class="playlist-card" type="button" data-playlist="hip-hop"><h3>Hip Hop</h3><small>Rhythm / flow</small></button>
+        <button class="playlist-card" type="button" data-playlist="indie-pop"><h3>Indie Pop</h3><small>Offbeat / vivid</small></button>
         <button class="playlist-card" type="button" data-playlist="jazz"><h3>Jazz</h3><small>Loose / timeless</small></button>
         <button class="playlist-card" type="button" data-playlist="metal"><h3>Metal</h3><small>Heavy / focused</small></button>
         <button class="playlist-card" type="button" data-playlist="classical"><h3>Classical</h3><small>Form / movement</small></button>
@@ -303,6 +304,7 @@
     <div class="playlist-feedback">
       <p id="playlist-status" class="playlist-status" aria-live="polite"></p>
       <div id="playlist-links" class="playlist-links"></div>
+      <div id="playlist-preview" class="playlist-preview" aria-live="polite"></div>
     </div>
   </section>
 </main>

@@ -1,3 +1,5 @@
+import { demoApiRequest, isDemoApiRequest, isDemoMode } from "./demo.js";
+
 let csrfToken = "";
 
 export function setCsrfToken(token) {
@@ -5,6 +7,10 @@ export function setCsrfToken(token) {
 }
 
 export async function apiRequest(url, options = {}) {
+  if (isDemoMode() && isDemoApiRequest(url)) {
+    return demoApiRequest(url, options);
+  }
+
   const requestOptions = { ...options };
   const method = (requestOptions.method || "GET").toUpperCase();
   const headers = new Headers(requestOptions.headers || {});

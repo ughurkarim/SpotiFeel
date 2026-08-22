@@ -1,4 +1,5 @@
 import { apiRequest, setCsrfToken } from "./js/api.js";
+import { setDemoMode } from "./js/demo.js";
 import { state } from "./js/state.js";
 import {
   formatDuration as fmt,
@@ -330,6 +331,7 @@ const DEFAULT_THEME = THEME_PALETTES.default;
 const elements = {
   loginBtn: document.getElementById("login"),
   logoutBtn: document.getElementById("logout"),
+  demoToggle: document.getElementById("demo-toggle"),
   track: document.getElementById("track"),
   dayOverview: document.getElementById("day-overview"),
   dayChapters: document.getElementById("day-chapters"),
@@ -337,6 +339,7 @@ const elements = {
   dayPanes: document.querySelectorAll("[data-day-panel]"),
   recList: document.getElementById("rec-list"),
   playlistLinks: document.getElementById("playlist-links"),
+  playlistPreview: document.getElementById("playlist-preview"),
   playlistStatus: document.getElementById("playlist-status"),
   wrappedStatus: document.getElementById("wrapped-status"),
   wrappedShareCard: document.getElementById("wrapped-share-card"),
@@ -2214,7 +2217,14 @@ function showBanner(message, actionLabel = "", actionHref = "/login") {
 
 function syncAuthButtons() {
   if (elements.loginBtn) elements.loginBtn.classList.toggle("hidden", state.authenticated);
-  if (elements.logoutBtn) elements.logoutBtn.classList.toggle("hidden", !state.authenticated);
+  if (elements.logoutBtn) elements.logoutBtn.classList.toggle("hidden", !state.authenticated || state.demoMode);
+  if (elements.demoToggle) {
+    elements.demoToggle.classList.toggle("hidden", state.authenticated && !state.demoMode);
+    elements.demoToggle.textContent = state.demoMode ? "Exit Demo" : "Try Demo";
+    elements.demoToggle.setAttribute("aria-label", state.demoMode ? "Exit Demo Mode" : "Try Demo Mode");
+  }
+  if (state.demoMode && elements.sessionChip) elements.sessionChip.textContent = "Demo Mode";
+  document.body.classList.toggle("demo-mode", state.demoMode);
   syncExperienceState();
 }
 
@@ -2230,6 +2240,18 @@ function setPlaylistStatus(message, tone = "muted") {
   elements.playlistStatus.textContent = message;
   elements.playlistStatus.classList.toggle("is-error", tone === "error");
   elements.playlistStatus.classList.toggle("is-success", tone === "success");
+}
+
+function renderPlaylistPreview(tracks = []) {
+  if (!elements.playlistPreview) return;
+  elements.playlistPreview.innerHTML = "";
+  elements.playlistPreview.classList.toggle("hidden", !tracks.length);
+  if (!tracks.length) return;
+  elements.playlistPreview.appendChild(createTrackRow(tracks, {
+    rowClass: "card-row playlist-preview-row",
+    badge: (_track, index) => `Pick ${index + 1}`,
+    showNowPlaying: false,
+  }));
 }
 
 function setPlaylistCardsDisabled(disabled) {
@@ -3504,9 +3526,7 @@ async function getWrappedShareTheme(report) {
   let palette = createWrappedFallbackPalette(report);
 
   if (imageUrl) {
-    const paletteUrl = imageUrl.startsWith("/api/wrapped/artwork?")
-      ? imageUrl
-      : getWrappedArtworkProxyUrl(imageUrl);
+    const paletteUrl = getWrappedDisplayArtworkUrl(imageUrl);
     try {
       palette = await buildArtworkPalette(paletteUrl);
     } catch (_error) {
@@ -3546,7 +3566,7 @@ function loadWrappedCanvasImage(imageUrl) {
     image.referrerPolicy = "no-referrer";
     image.onload = () => resolve(image);
     image.onerror = () => resolve(null);
-    image.src = getWrappedArtworkProxyUrl(imageUrl);
+    image.src = getWrappedDisplayArtworkUrl(imageUrl);
   });
 }
 
@@ -4033,6 +4053,7 @@ function resetSignedOutUi() {
     "Play a song after logging in and SpotiFeel will build similar picks."
   );
   setPlaylistStatus("Log in before creating playlists.");
+  renderPlaylistPreview([]);
   setPlaylistCardsDisabled(false);
   renderWrappedSignedOut();
 }
@@ -4045,6 +4066,7 @@ async function syncSession() {
   try {
     const { response, data } = await getJson("/api/session");
     if (response.ok) setCsrfToken(data?.csrf_token || "");
+    state.demoMode = response.ok && !!data?.demo_mode;
     if (response.ok && data?.configured === false) {
       state.authenticated = false;
       syncAuthButtons();
@@ -4637,6 +4659,7 @@ async function createPlaylist(type) {
 
   state.activePlaylist = type;
   setPlaylistCardsDisabled(true);
+  renderPlaylistPreview([]);
   setPlaylistStatus(`Creating a ${playlistName} playlist...`);
   flashPlaylistCardState(button, "is-loading");
   button?.setAttribute("aria-busy", "true");
@@ -4659,7 +4682,8 @@ async function createPlaylist(type) {
       return;
     }
 
-    if (!response.ok || !data?.playlist_url) {
+    const previewTracks = Array.isArray(data?.tracks) ? data.tracks : [];
+    if (!response.ok || (!data?.playlist_url && !previewTracks.length)) {
       flashPlaylistCardState(button, "is-error");
       setPlaylistStatus(
         `Could not create the ${playlistName} playlist${data?.error ? `: ${data.error}` : "."}`,
@@ -4668,10 +4692,12 @@ async function createPlaylist(type) {
       return;
     }
 
-    const existingLink = Array.from(elements.playlistLinks?.querySelectorAll("[data-playlist-link]") || []).find(
-      (link) => link.dataset.playlistLink === type
-    );
-    if (!existingLink && elements.playlistLinks) {
+    const existingLink = data.playlist_url
+      ? Array.from(elements.playlistLinks?.querySelectorAll("[data-playlist-link]") || []).find(
+          (link) => link.dataset.playlistLink === type
+        )
+      : null;
+    if (data.playlist_url && !existingLink && elements.playlistLinks) {
       const link = document.createElement("a");
       link.href = data.playlist_url;
       link.target = "_blank";
@@ -4681,6 +4707,7 @@ async function createPlaylist(type) {
       elements.playlistLinks.prepend(link);
     }
 
+    renderPlaylistPreview(previewTracks);
     setPlaylistStatus(data?.summary || `${playlistName} playlist created. Use the link below to open it.`, "success");
     flashPlaylistCardState(button, "is-success");
   } catch (_error) {
@@ -4875,6 +4902,11 @@ function setupEventHandlers() {
     button.addEventListener("click", () => {
       createPlaylist(button.dataset.playlist || "");
     });
+  });
+
+  elements.demoToggle?.addEventListener("click", () => {
+    setDemoMode(!state.demoMode);
+    window.location.reload();
   });
 
   if ("ResizeObserver" in window) {

@@ -15,7 +15,7 @@ let runtimeDemoMode = false;
 let playback = {
   trackId: "billie-jean",
   isPlaying: true,
-  progressMs: 284000,
+  progressMs: 288000,
   syncedAt: Date.now(),
 };
 

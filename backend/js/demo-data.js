@@ -7,6 +7,8 @@ const ART_PALETTES = [
   ["#152127", "#4ba49c", "#d7d18d"],
   ["#211b36", "#8a79c7", "#e68f96"],
   ["#252417", "#a6a758", "#e6ba7d"],
+  ["#160307", "#A50F2D", "#F04455"],
+  ["#03020A", "#180B63", "#175CFF"],
 ];
 
 function escapeSvg(value) {
@@ -80,13 +82,12 @@ function makeTrack(id, name, artist, album, year, durationMs, paletteIndex, popu
 }
 
 const TRACK_LIST = [
-  makeTrack("billie-jean", "Billie Jean", "Michael Jackson", "Thriller", 1982, 294000, 4, 96),
+  makeTrack("billie-jean", "Billie Jean", "Michael Jackson", "Thriller", 1982, 294000, 8, 96),
   makeTrack("thriller", "Thriller", "Michael Jackson", "Thriller", 1982, 358000, 4, 94),
   makeTrack("beat-it", "Beat It", "Michael Jackson", "Thriller", 1982, 258000, 4, 93),
   makeTrack("pyt", "P.Y.T. (Pretty Young Thing)", "Michael Jackson", "Thriller", 1982, 239000, 4, 90),
   makeTrack("wanna-be-startin", "Wanna Be Startin' Somethin'", "Michael Jackson", "Thriller", 1982, 363000, 4, 91),
-  makeTrack("smooth-criminal", "Smooth Criminal", "Michael Jackson", "Bad", 1987, 257000, 0, 93),
-  makeTrack("man-in-mirror", "Man in the Mirror", "Michael Jackson", "Bad", 1987, 319000, 0, 91),
+  makeTrack("smooth-criminal", "Smooth Criminal", "Michael Jackson", "Bad", 1987, 257000, 9, 93),  makeTrack("man-in-mirror", "Man in the Mirror", "Michael Jackson", "Bad", 1987, 319000, 0, 91),
   makeTrack("way-you-make", "The Way You Make Me Feel", "Michael Jackson", "Bad", 1987, 298000, 0, 90),
   makeTrack("human-nature", "Human Nature", "Michael Jackson", "Thriller", 1982, 247000, 4, 89),
   makeTrack("dont-stop-til", "Don't Stop 'Til You Get Enough", "Michael Jackson", "Off the Wall", 1979, 365000, 2, 92),

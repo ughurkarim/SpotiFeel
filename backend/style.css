@@ -7927,3 +7927,23 @@ body.experience-disconnected .session-banner .btn:focus-visible {
     -webkit-line-clamp: 4;
   }
 }
+
+@media (min-width: 901px) {
+  #playlists:has(.playlist-preview) {
+    height: auto;
+    min-height: var(--app-view-height);
+    overflow: visible;
+  }
+
+  #playlists:has(.playlist-preview) .playlist-pane {
+    flex: 0 0 auto;
+    overflow: visible;
+  }
+
+  #playlists:has(.playlist-preview) .playlist-grid {
+    min-height: 300px;
+    flex: 0 0 auto;
+    grid-template-rows: repeat(2, minmax(150px, auto));
+    overflow: visible;
+  }
+}

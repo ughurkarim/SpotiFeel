@@ -3982,12 +3982,10 @@ async function shareWrappedImage() {
   elements.wrappedImageShare.setAttribute("aria-busy", "true");
   elements.wrappedImageShare.textContent = "Creating…";
   try {
-    setWrappedStatus("Creating your share image...");
     const canvas = await buildWrappedImageCanvas(report, pane);
     const blob = await canvasBlob(canvas);
     const filename = `spotifeel-${range}-${pane}.png`;
     openWrappedSharePreview(blob, filename, paneLabel, rangeLabel, canvas.wrappedShareTheme);
-    setWrappedStatus("Share image ready.", "success");
   } catch (_error) {
     setWrappedStatus("Image generation failed. Download remains available after retrying.", "error");
   } finally {
